@@ -1,0 +1,34 @@
+[project]
+name = "cvfsnet"
+version = "0.1.0"
+description = "CVFSNet training and inference dependencies"
+requires-python = ">=3.9"
+dependencies = [
+  "torch",
+  "torchvision",
+  "numpy",
+  "pillow",
+  "opencv-python",
+  "simpleitk",
+  "lmdb",
+  "scikit-image",
+  "torchio",
+  "fvcore",
+  "thop",
+  "yacs",
+  "prefetch-generator",
+  "torchsampler",
+  "sync-batchnorm",
+  "loguru",
+  "wandb",
+  "setproctitle",
+  "gitpython",
+  "pyyaml",
+  "termcolor",
+  "tqdm",
+  "scikit-learn",
+  "matplotlib",
+]
+
+[tool.uv]
+package = false
