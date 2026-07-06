@@ -56,4 +56,6 @@ wandb/latest-run/files/config.yaml
 slurm*
 single_submit_files/*
 dual_submit_files/*
-*.pkl
+*.pklAmTICIS/
+plots/
+AmTICIS/
