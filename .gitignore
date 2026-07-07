@@ -11,7 +11,6 @@ play*
 *.tar.gz
 *.json
 *.pyth
-*.yaml
 .vscode/
 .vscode/*
 output/*
@@ -22,7 +21,6 @@ tmp/*
 tmp/
 .ipynb_checkpoints/*
 *.pyth
-*.yaml
 .vscode/
 .vscode/*
 output/*
@@ -38,7 +36,6 @@ output_runs/
 wandb/*
 wandb/
 wandb/latest-run/files/conda-environment.yaml
-*.yaml
 DSFNet_MTICI/wandb/*
 output_runs/
 /mnt/DSFNet_MTICI/wandb/*

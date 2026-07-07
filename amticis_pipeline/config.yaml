@@ -1,0 +1,118 @@
+# =============================================================================
+# AmTICIS data-pipeline configuration
+# -----------------------------------------------------------------------------
+# Every knob that controls how raw NIfTI scans are turned into model-ready
+# tensors lives here. Changing preprocessing should only require editing this
+# file -- never the Python code.
+#
+# Quick-reference for the most common edits:
+#   * Number of frames .......... data.num_frames        (e.g. 4 / 8 / 12 / 16)
+#   * Spatial resolution ........ data.image_size
+#   * View mode ................. views.active           ([AP] | [sagittal] | [AP, sagittal])
+#   * Label granularity ......... data.label_mode        (full | fuse01 | binary)
+#   * Batch size / workers ...... loader.*
+#   * Augmentations ............. transforms.train / transforms.val
+# =============================================================================
+
+data:
+  # Directory holding the raw AmTICIS *.nii.gz scans.
+  root_dir: AmTICIS
+  # Train/val split description (JSON produced by the original repository).
+  split_file: train_val_split.json
+  # Key inside the split JSON that stores the coronal (base) file lists.
+  split_view_key: CORONAL_VIEW
+  # The split JSON lists file names with this extension ...
+  split_name_extension: .dcm
+  # ... while the raw scans on disk use this one.
+  file_extension: .nii.gz
+
+  # Label granularity:
+  #   full   -> 5 classes (T0, T1, T2a, T2b, T3)
+  #   fuse01 -> 4 classes (T0+T1 merged) -- the setting used by the paper
+  #   binary -> 2 classes (successful vs. unsuccessful reperfusion)
+  label_mode: binary
+
+  # ---- Temporal / spatial resampling (see transforms.ResizeView) ----------
+  # CHANGE FRAME COUNT HERE. Nothing else needs to change.
+  num_frames: 8
+  # Output spatial size (height == width).
+  image_size: 256
+  # Interpolation used when resampling the (T, H, W) volume.
+  interpolation: trilinear
+  align_corners: true
+
+views:
+  # Which views to load. Drives the three supported modes with no code change:
+  #   [AP]              -> anterior-posterior (coronal) only
+  #   [sagittal]        -> sagittal only
+  #   [AP, sagittal]    -> both views
+  # ADD A NEW VIEW: append its name here and describe it under `definitions`.
+  active: [AP]
+
+  # How to derive each view's file name from the coronal (base) name listed in
+  # the split JSON. The base names contain the "_C" marker; other views are
+  # obtained by substituting that marker.
+  definitions:
+    AP:
+      replace_from: _C
+      replace_to: _C        # identity: the coronal file is the base
+    sagittal:
+      replace_from: _C
+      replace_to: _S
+
+splits:
+  # Map logical stage -> key inside the split JSON.
+  # The dataset ships without a dedicated test split, so `test` reuses `val`.
+  # Point this at a real "test" key once one exists.
+  train: train
+  val: val
+  test: val
+
+loader:
+  batch_size: 16
+  num_workers: 8
+  val_batch_size: 16
+  val_num_workers: 16
+  pin_memory: false
+  drop_last: false
+  # Class-balanced oversampling for the training loader (WeightedRandomSampler),
+  # matching the original builder.build_loader behaviour.
+  use_weighted_sampler: true
+  persistent_workers: false
+  prefetch_factor: 2
+
+transforms:
+  # Declarative augmentation pipelines. Each entry is `{name, params}` where
+  # `name` resolves to a transform class in amticis_pipeline/transforms.py.
+  # Order matters -- transforms are applied top to bottom on a (C, T, H, W)
+  # tensor.
+  #
+  # The `Resize` transform's `t` (frames) and `visual` (spatial size) are
+  # injected automatically from data.num_frames / data.image_size, so they are
+  # never hardcoded here.
+  #
+  # ADD / REMOVE / REORDER AUGMENTATIONS by editing these lists.
+  train:
+    - {name: RandomErode,          params: {k: 3, high: 192, low: 16, p: 0.15}}
+    - {name: RandomDilate,         params: {k: 3, high: 192, low: 16, p: 0.15}}
+    - {name: TioClamp,             params: {clamps: [16, 192], p: 0}}
+    - {name: TioRandomFlip,        params: {p: 0.25}}
+    - {name: TioRandomAnisotropy,  params: {p: 0.25}}
+    - {name: TioRandomMotion,      params: {p: 0.25}}
+    - {name: TioRandomGhosting,    params: {p: 0.25}}
+    - {name: TioRandomSpike,       params: {p: 0.25}}
+    - {name: TioRandomBiasField,   params: {p: 0.25}}
+    - {name: TioRandomBlur,        params: {p: 0.25}}
+    - {name: TioRandomNoise,       params: {p: 0.25}}
+    - {name: TioRandomGamma,       params: {p: 0.25}}
+    - {name: RandomRotation,       params: {degrees: [-30, 30], fill: 192, p: 0.25}}
+    - {name: Crop,                 params: {crop: [0.1, 0.1, 0.2, 0.1], p: 0.5}}
+    - {name: Resize,               params: {}}   # t / visual injected from data.*
+    - {name: TioZNormalization,    params: {p: 1, div255: true}}
+
+  # Validation / test: deterministic, no augmentation. Resampling to
+  # (num_frames, image_size, image_size) already happens in ResizeView before
+  # these run, so only normalization remains -- exactly like the original
+  # val_trans.
+  val:
+    - {name: TioZNormalization,    params: {p: 1, div255: true}}
