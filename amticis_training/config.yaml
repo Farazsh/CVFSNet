@@ -1,0 +1,222 @@
+# =============================================================================
+# Lightning training configuration
+# -----------------------------------------------------------------------------
+# This file controls model training and validation. The data loading itself is
+# handled by amticis_pipeline/config.yaml; this file points to that config and
+# may override selected values without editing the data-pipeline defaults.
+#
+# Common edits:
+#   * Change architecture .......... model.name / model.params
+#   * Change class granularity ..... data.pipeline_overrides.data.label_mode
+#   * Change views ................. data.pipeline_overrides.views.active
+#   * Change frame/size ............ data.pipeline_overrides.data.num_frames
+#                                  / data.pipeline_overrides.data.image_size
+#   * Change optimizer/LR .......... optimizer.*
+#   * Enable/disable W&B ........... logging.wandb.enabled
+# =============================================================================
+
+seed: 14207
+
+run:
+  # Human-readable experiment name used by loggers and checkpoint folders.
+  name: cvfsnet_pt_binary_cor_v2
+  # Root directory for Lightning logs and checkpoints.
+  output_dir: output_runs_lightning
+
+data:
+  # Existing structured LightningDataModule config.
+  config_path: amticis_pipeline/config.yaml
+  # Relative paths in the data config resolve from this project root.
+  project_root: .
+
+  # Overrides are deep-merged into amticis_pipeline/config.yaml at runtime.
+  # Keep both AP and sagittal active for CVFSNet, which consumes dual views.
+  pipeline_overrides:
+    data:
+      label_mode: binary
+      num_frames: 8
+      image_size: 256
+    views:
+      active: [AP, sagittal]
+      definitions:
+        AP:
+          replace_from: _C
+          replace_to: _C
+        sagittal:
+          replace_from: _C
+          replace_to: _C
+    loader:
+      batch_size: 16
+      num_workers: 16
+      val_batch_size: 16
+      val_num_workers: 16
+
+model:
+  # Registry name. Add new architectures in models.py and switch here.
+  name: cvfsnet
+
+  # How a dataloader batch is converted into the model input.
+  # dual_view_list yields [batch["AP"], batch["sagittal"]].
+  input:
+    type: dual_view_list
+    views: [AP, sagittal]
+
+  # Output names are matched positionally against the model's returned list.
+  # None outputs from disabled deep supervision are skipped automatically.
+  output_names:
+    - fuse
+    - AP
+    - sagittal
+    - AP_side1
+    - sagittal_side1
+    - AP_side2
+    - sagittal_side2
+    - AP_side3
+    - sagittal_side3
+    - ova
+
+  params:
+    # AmTICISDataModule emits one-channel clips: (B, 1, T, H, W).
+    input_channel: 1
+    input_clip_length: 8
+    input_crop_size: 256
+    model_num_class: 2
+    use_marc: true
+    use_fusion: CVFM
+    mlp_dropout_rate: 0.0
+    num_heads: 8
+    expand_dim: 8
+    deep_super: [false, true, false, true]
+    OVA: false
+    # Pretrained paths are optional. Leave null when channel counts differ from
+    # the checkpoint stem or when training from scratch.
+    cor_pretrained: null
+    sag_pretrained: null
+    fuse_pretrained: null
+    all_pretrained: Src/X3D_M-Kinect.pyth
+
+loss:
+  # Lightning-safe implementation equivalent to the legacy LabelSmoothSeasaw_MISO.
+  name: label_smooth_seesaw_miso
+  params:
+    smoothing: 0.4
+    p: 0.8
+    q: 1.0
+    eps: 0.01
+    balance:
+      - [0.8, 1.2]
+      - [0.8, 1.2]
+      - [0.8, 1.2]
+      - [0.4, 0.6]
+      - [0.4, 0.6]
+      - [0.2, 0.3]
+      - [0.2, 0.3]
+      - [0.1, 0.15]
+      - [0.1, 0.15]
+
+optimizer:
+  name: AdamW
+  params:
+    lr: 0.0003
+    weight_decay: 0.01
+  # CVFSNet-specific parameter grouping. CVFM attention parameters get
+  # lr * cvafm_lr_multiplier, matching the legacy builder behavior.
+  parameter_groups:
+    cvafm_lr_multiplier: 10.0
+
+scheduler:
+  name: CosineAnnealingWarmRestarts
+  interval: epoch
+  frequency: 1
+  monitor: val/fuse/f1_macro
+  params:
+    T_0: 35
+    T_mult: 2
+    eta_min: 0.000001
+
+trainer:
+  max_epochs: 300
+  accelerator: gpu
+  devices: [2]
+  # CVFSNet has optional/deep-supervision branches. This DDP strategy is more
+  # tolerant when a configured architecture leaves some parameters unused.
+  strategy: ddp_find_unused_parameters_true
+  precision: 32
+  log_every_n_steps: 5
+  deterministic: false
+  benchmark: true
+  gradient_clip_val: 12.0
+
+checkpointing:
+  enabled: true
+  monitor: val/fuse/f1_macro
+  mode: max
+  save_top_k: 1
+  save_last: true
+
+early_stopping:
+  enabled: true
+  monitor: val/fuse/f1_macro
+  mode: max
+  patience: 40
+
+metrics:
+  # Full metrics are accumulated over an epoch and logged at epoch end.
+  undefined_value: 0.0
+
+  # Global default for whether per-class metrics should be emitted. Per-output
+  # entries below can override this.
+  log_per_class: false
+
+  # Control exactly which model outputs and metrics are logged. Output names
+  # must match model.output_names above, e.g. fuse, AP, sagittal, AP_side1.
+  # Supported metric names: accuracy, auroc, auprc, precision, recall, f1,
+  # specificity, tp, tn, fp, fn, or all.
+  outputs:
+    # If false, only outputs explicitly enabled under per_output are logged.
+    default_enabled: false
+    # Metrics used by any output without a per-output override.
+    default_metrics: [all]
+
+    # Optional per-output overrides. Edit this block to record fewer metrics for
+    # selected views/heads, or to disable noisy auxiliary heads completely.
+    per_output:
+      fuse:
+        enabled: true
+        metrics: [all]
+        log_per_class: true
+      AP:
+        enabled: true
+        metrics: [accuracy, precision, recall, f1, specificity]
+        log_per_class: false
+      sagittal:
+        enabled: true
+        metrics: [accuracy, precision, recall, f1, specificity]
+        log_per_class: false
+      AP_side1:
+        enabled: false
+      sagittal_side1:
+        enabled: false
+      AP_side2:
+        enabled: false
+      sagittal_side2:
+        enabled: false
+      AP_side3:
+        enabled: false
+      sagittal_side3:
+        enabled: false
+      ova:
+        enabled: false
+
+logging:
+  csv:
+    enabled: true
+  wandb:
+    enabled: true
+    project: AmTICIS
+    entity: null
+    tags: [cvfsnet, lightning]
+    offline: false
+    # The config stores only the environment variable name, not the secret.
+    api_key_env: WANDB_API_KEY
+    log_model: false

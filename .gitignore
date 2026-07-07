@@ -56,3 +56,8 @@ dual_submit_files/*
 *.pklAmTICIS/
 plots/
 AmTICIS/
+# Generated outputs
+output_runs_lightning/
+
+# Test files
+tests/

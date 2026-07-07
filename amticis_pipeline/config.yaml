@@ -30,7 +30,7 @@ data:
   #   full   -> 5 classes (T0, T1, T2a, T2b, T3)
   #   fuse01 -> 4 classes (T0+T1 merged) -- the setting used by the paper
   #   binary -> 2 classes (successful vs. unsuccessful reperfusion)
-  label_mode: binary
+  label_mode: fuse01
 
   # ---- Temporal / spatial resampling (see transforms.ResizeView) ----------
   # CHANGE FRAME COUNT HERE. Nothing else needs to change.
