@@ -56,6 +56,10 @@ dual_submit_files/*
 *.pklAmTICIS/
 plots/
 AmTICIS/
+# Secrets / environment
+.env
+.env.*
+
 # Generated outputs
 output_runs_lightning/
 

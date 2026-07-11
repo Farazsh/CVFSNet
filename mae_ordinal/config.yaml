@@ -1,0 +1,95 @@
+# =============================================================================
+# VideoMAE + CORN ordinal regression -- coronal-only mTICI grading
+# -----------------------------------------------------------------------------
+# Data loading reuses amticis_pipeline (see mae_ordinal/dataloader.py). This
+# file only sets experiment-level knobs. Coronal single-view / 16-frame / 224px
+# / fuse01 defaults come from mae_ordinal.dataloader.CORONAL_OVERRIDES; anything
+# under data.pipeline_overrides here is deep-merged on top (wins).
+# =============================================================================
+
+seed: 14207
+
+run:
+  name: mae_ordinal_fuse01_ap_v1
+  output_dir: output_runs_lightning
+
+data:
+  config_path: amticis_pipeline/config.yaml
+  project_root: .
+  pipeline_overrides:
+    loader:
+      batch_size: 8
+      num_workers: 8
+      val_batch_size: 8
+      val_num_workers: 8
+      use_weighted_sampler: true
+
+model:
+  name: videomae_ordinal
+  input:
+    type: single_view_tensor
+    view: AP
+  params:
+    pretrained_name: MCG-NJU/videomae-base-finetuned-kinetics
+    dropout: 0.5
+    expected_num_frames: 16
+    expected_image_size: 224
+
+# Full fine-tuning: a small LR for the whole ~86M transformer + head.
+optimizer:
+  name: AdamW
+  params:
+    lr: 0.00001        # 1e-5
+    weight_decay: 0.05
+
+scheduler:
+  name: CosineAnnealingWarmRestarts
+  interval: epoch
+  frequency: 1
+  monitor: val/fuse/f1_macro
+  params:
+    T_0: 35
+    T_mult: 2
+    eta_min: 0.0000001  # 1e-7
+
+trainer:
+  max_epochs: 120
+  accelerator: gpu
+  devices: [0]
+  precision: 16-mixed
+  log_every_n_steps: 5
+  deterministic: false
+  benchmark: true
+  gradient_clip_val: 1.0
+
+checkpointing:
+  enabled: true
+  monitor: val/fuse/f1_macro
+  mode: max
+  save_top_k: 1
+  save_last: true
+
+early_stopping:
+  enabled: true
+  monitor: val/fuse/f1_macro
+  mode: max
+  patience: 40
+
+metrics:
+  undefined_value: 0.0
+  log_per_class: true
+  outputs:
+    default_enabled: true
+    default_metrics: [all]
+
+logging:
+  csv:
+    enabled: true
+  wandb:
+    enabled: true
+    project: AmTICIS
+    entity: null
+    tags: [videomae, ordinal, corn, coronal]
+    offline: false
+    api_key_env: WANDB_API_KEY
+    log_model: false

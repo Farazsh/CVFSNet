@@ -19,7 +19,7 @@ seed: 14207
 
 run:
   # Human-readable experiment name used by loggers and checkpoint folders.
-  name: cvfsnet_pt_binary_cor_v2
+  name: cvfsnet_pt_fuse01_sag_v1
   # Root directory for Lightning logs and checkpoints.
   output_dir: output_runs_lightning
 
@@ -33,7 +33,7 @@ data:
   # Keep both AP and sagittal active for CVFSNet, which consumes dual views.
   pipeline_overrides:
     data:
-      label_mode: binary
+      label_mode: fuse01
       num_frames: 8
       image_size: 256
     views:
@@ -41,10 +41,10 @@ data:
       definitions:
         AP:
           replace_from: _C
-          replace_to: _C
+          replace_to: _S
         sagittal:
           replace_from: _C
-          replace_to: _C
+          replace_to: _S
     loader:
       batch_size: 16
       num_workers: 16
@@ -80,7 +80,7 @@ model:
     input_channel: 1
     input_clip_length: 8
     input_crop_size: 256
-    model_num_class: 2
+    model_num_class: 4
     use_marc: true
     use_fusion: CVFM
     mlp_dropout_rate: 0.0
@@ -137,7 +137,7 @@ scheduler:
 trainer:
   max_epochs: 300
   accelerator: gpu
-  devices: [2]
+  devices: [3]
   # CVFSNet has optional/deep-supervision branches. This DDP strategy is more
   # tolerant when a configured architecture leaves some parameters unused.
   strategy: ddp_find_unused_parameters_true
@@ -155,7 +155,7 @@ checkpointing:
   save_last: true
 
 early_stopping:
-  enabled: true
+  enabled: false
   monitor: val/fuse/f1_macro
   mode: max
   patience: 40

@@ -1,0 +1,93 @@
+# =============================================================================
+# VideoMAE + CORN ordinal regression -- FROZEN backbone (linear-probe style)
+# -----------------------------------------------------------------------------
+# The pretrained VideoMAE encoder is frozen; only the CORN head is trained.
+# Linear-probe convention: higher LR (1e-3), small/zero weight decay, larger
+# batch, warmup + cosine. No layer-wise decay (only the head trains).
+# =============================================================================
+
+seed: 14207
+
+run:
+  name: mae_ordinal_fuse01_ap_frozen
+  output_dir: output_runs_lightning
+
+data:
+  config_path: amticis_pipeline/config.yaml
+  project_root: .
+  pipeline_overrides:
+    loader:
+      batch_size: 16
+      num_workers: 8
+      val_batch_size: 16
+      val_num_workers: 8
+      use_weighted_sampler: true
+
+model:
+  name: videomae_ordinal
+  input:
+    type: single_view_tensor
+    view: AP
+  params:
+    pretrained_name: MCG-NJU/videomae-base-finetuned-kinetics
+    normalize: imagenet
+    freeze_backbone: true
+    dropout: 0.5
+    expected_num_frames: 16
+    expected_image_size: 224
+
+optimizer:
+  name: AdamW
+  base_lr: 0.001         # 1e-3 (linear-probe style; only head trains)
+  weight_decay: 0.0001   # 1e-4
+  betas: [0.9, 0.999]
+  # no layer_decay: backbone is frozen
+
+scheduler:
+  name: warmup_cosine
+  interval: epoch
+  warmup_epochs: 5
+  warmup_start_factor: 0.01
+  eta_min: 0.000001      # 1e-6
+
+trainer:
+  max_epochs: 75
+  accelerator: gpu
+  devices: [0]
+  precision: 16-mixed
+  log_every_n_steps: 5
+  deterministic: false
+  benchmark: true
+  gradient_clip_val: 1.0
+
+checkpointing:
+  enabled: true
+  monitor: val/fuse/f1_macro
+  mode: max
+  save_top_k: 1
+  save_last: true
+
+early_stopping:
+  enabled: true
+  monitor: val/fuse/f1_macro
+  mode: max
+  patience: 25
+
+metrics:
+  undefined_value: 0.0
+  log_per_class: true
+  outputs:
+    default_enabled: true
+    default_metrics: [all]
+
+logging:
+  csv:
+    enabled: true
+  wandb:
+    enabled: true
+    project: AmTICIS
+    entity: null
+    tags: [videomae, ordinal, corn, coronal, frozen]
+    offline: false
+    api_key_env: WANDB_API_KEY
+    log_model: false
