@@ -1,0 +1,89 @@
+# VideoMAE binary T012a vs T2b3 — AP (coronal) view, full fine-tune
+
+seed: 14207
+
+run:
+  name: mae_binary_t012a_ap
+  output_dir: output_runs_lightning
+
+data:
+  config_path: amticis_pipeline/config.yaml
+  project_root: .
+  preset: ap_binary
+  pipeline_overrides:
+    loader:
+      batch_size: 8
+      num_workers: 8
+      val_batch_size: 8
+      val_num_workers: 8
+      use_weighted_sampler: true
+
+model:
+  name: videomae_binary
+  input:
+    type: single_view_tensor
+    view: AP
+  params:
+    pretrained_name: MCG-NJU/videomae-base-finetuned-kinetics
+    normalize: imagenet
+    freeze_backbone: false
+    hidden_dropout_prob: 0.1
+    dropout: 0.5
+    expected_num_frames: 16
+    expected_image_size: 224
+
+optimizer:
+  name: AdamW
+  base_lr: 0.0002
+  weight_decay: 0.05
+  layer_decay: 0.75
+  betas: [0.9, 0.999]
+
+scheduler:
+  name: warmup_cosine
+  interval: epoch
+  warmup_epochs: 5
+  warmup_start_factor: 0.01
+  eta_min: 0.000001
+
+trainer:
+  max_epochs: 75
+  accelerator: gpu
+  devices: [0]
+  precision: 16-mixed
+  log_every_n_steps: 5
+  deterministic: false
+  benchmark: true
+  gradient_clip_val: 1.0
+
+checkpointing:
+  enabled: true
+  monitor: val/fuse/f1_macro
+  mode: max
+  save_top_k: 1
+  save_last: true
+
+early_stopping:
+  enabled: true
+  monitor: val/fuse/f1_macro
+  mode: max
+  patience: 25
+
+metrics:
+  undefined_value: 0.0
+  log_per_class: true
+  outputs:
+    default_enabled: true
+    default_metrics: [all]
+
+logging:
+  csv:
+    enabled: true
+  wandb:
+    enabled: true
+    project: AmTICIS
+    entity: null
+    tags: [videomae, binary, bce, t012a, ap, finetune]
+    offline: false
+    api_key_env: WANDB_API_KEY
+    log_model: false

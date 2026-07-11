@@ -21,9 +21,17 @@ from amticis_training.config import build_pipeline_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+
+def _deep_merge(base: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            base[key] = _deep_merge(dict(base[key]), value)
+        else:
+            base[key] = value
+    return base
+
+
 # Coronal single-view overrides deep-merged into amticis_pipeline/config.yaml.
-# NB: with active=[AP] and AP mapping _C->_C, the loader yields exactly one
-# coronal clip per study under batch["AP"], shape (B, 1, T, H, W).
 CORONAL_OVERRIDES: Dict[str, Any] = {
     "data": {
         "label_mode": "fuse01",
@@ -38,14 +46,68 @@ CORONAL_OVERRIDES: Dict[str, Any] = {
     },
 }
 
+BINARY_COMMON: Dict[str, Any] = {
+    "data": {
+        "label_mode": "binary",
+        "num_frames": 16,
+        "image_size": 224,
+    },
+}
+
+AP_BINARY_OVERRIDES: Dict[str, Any] = _deep_merge(
+    dict(BINARY_COMMON),
+    {
+        "views": {
+            "active": ["AP"],
+            "definitions": {
+                "AP": {"replace_from": "_C", "replace_to": "_C"},
+            },
+        },
+    },
+)
+
+SAGITTAL_BINARY_OVERRIDES: Dict[str, Any] = _deep_merge(
+    dict(BINARY_COMMON),
+    {
+        "views": {
+            "active": ["sagittal"],
+            "definitions": {
+                "sagittal": {"replace_from": "_C", "replace_to": "_S"},
+            },
+        },
+    },
+)
+
+DUAL_BINARY_OVERRIDES: Dict[str, Any] = _deep_merge(
+    dict(BINARY_COMMON),
+    {
+        "views": {
+            "active": ["AP", "sagittal"],
+            "definitions": {
+                "AP": {"replace_from": "_C", "replace_to": "_C"},
+                "sagittal": {"replace_from": "_C", "replace_to": "_S"},
+            },
+        },
+    },
+)
+
+VIEW_PRESETS: Dict[str, Dict[str, Any]] = {
+    "coronal": CORONAL_OVERRIDES,
+    "ap_binary": AP_BINARY_OVERRIDES,
+    "sagittal_binary": SAGITTAL_BINARY_OVERRIDES,
+    "dual_binary": DUAL_BINARY_OVERRIDES,
+}
+
 
 def build_datamodule(
     pipeline_overrides: Optional[Dict[str, Any]] = None,
     config_path: str = "amticis_pipeline/config.yaml",
     project_root: str = ".",
+    preset: Optional[str] = None,
 ) -> AmTICISDataModule:
-    """Return an ``AmTICISDataModule`` configured for coronal-only VideoMAE input."""
-    overrides = _deep_merge(dict(CORONAL_OVERRIDES), pipeline_overrides or {})
+    """Return an ``AmTICISDataModule`` configured for VideoMAE input."""
+    base = dict(VIEW_PRESETS[preset]) if preset else {}
+    overrides = _deep_merge(base, pipeline_overrides or {})
     training_like = {
         "data": {
             "config_path": config_path,
@@ -55,12 +117,3 @@ def build_datamodule(
     }
     pipeline_config = build_pipeline_config(training_like)
     return AmTICISDataModule(config=pipeline_config)
-
-
-def _deep_merge(base: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
-    for key, value in extra.items():
-        if isinstance(value, dict) and isinstance(base.get(key), dict):
-            base[key] = _deep_merge(dict(base[key]), value)
-        else:
-            base[key] = value
-    return base

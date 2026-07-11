@@ -63,5 +63,16 @@ AmTICIS/
 # Generated outputs
 output_runs_lightning/
 
+# Checkpoints / model weights (Lightning, PyTorch, HF)
+*.ckpt
+*.pt
+*.pth.tar
+*.safetensors
+*.bin
+checkpoints/
+
+# Experiment logs (repo-root training runs)
+mae_*.log
+
 # Test files
 tests/

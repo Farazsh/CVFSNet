@@ -1,7 +1,7 @@
-"""Entry point for VideoMAE + CORN ordinal training.
+"""Entry point for VideoMAE training (ordinal and binary).
 
     uv run python -m mae_ordinal.train
-    uv run python -m mae_ordinal.train --set trainer.max_epochs=1
+    uv run python -m mae_ordinal.train --config mae_ordinal/config_binary_ap.yaml
 
 Reuses the existing data pipeline and metric accumulator; does not modify any
 file inside amticis_pipeline / amticis_training / Src / Data / Loss / Lib.
@@ -35,9 +35,12 @@ except Exception:  # pragma: no cover
 
 from amticis_training.config import deep_update, parse_overrides
 
+from .binary_lightning_module import VideoMAEBinaryModule
 from .dataloader import build_datamodule
 from .lightning_module import VideoMAEOrdinalModule
-from .model import build_videomae_ordinal
+from .model import build_videomae_binary, build_videomae_ordinal
+
+BINARY_MODEL_NAMES = {"videomae_binary", "videomae_binary_dual"}
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -92,11 +95,17 @@ def main() -> None:
         pipeline_overrides=data_cfg.get("pipeline_overrides"),
         config_path=data_cfg.get("config_path", "amticis_pipeline/config.yaml"),
         project_root=data_cfg.get("project_root", "."),
+        preset=data_cfg.get("preset"),
     )
     num_classes = datamodule.config.data.num_classes
 
-    model = build_videomae_ordinal(config["model"], num_classes)
-    module = VideoMAEOrdinalModule(model=model, config=config, num_classes=num_classes)
+    model_name = str(config.get("model", {}).get("name", "videomae_ordinal"))
+    if model_name in BINARY_MODEL_NAMES:
+        model = build_videomae_binary(config["model"])
+        module = VideoMAEBinaryModule(model=model, config=config, num_classes=num_classes)
+    else:
+        model = build_videomae_ordinal(config["model"], num_classes)
+        module = VideoMAEOrdinalModule(model=model, config=config, num_classes=num_classes)
 
     run_dir = Path(config["run"].get("output_dir", "output_runs_lightning")) / config["run"]["name"]
     run_dir.mkdir(parents=True, exist_ok=True)
