@@ -1,7 +1,7 @@
 seed: 14207
 
 run:
-  name: medgemma_zero_shot_binary_tici_corrected
+  name: medsiglip_zero_shot_binary_tici_control
   output_dir: output_runs_lightning
 
 data:
@@ -11,7 +11,7 @@ data:
     data:
       label_mode: binary
       num_frames: 8
-      image_size: 896
+      image_size: 448
       interpolation: trilinear
       align_corners: true
     views:
@@ -29,38 +29,26 @@ data:
 
 input:
   num_frames: 8
-  image_size: 896
+  image_size: 448
   views: [AP, sagittal]
   frame_order: chronological
 
 model:
-  pretrained_name: google/medgemma-1.5-4b-it
-  revision: 91850547d9f0b2fdd21aa7c5f4f3d1a8a52c243b
+  pretrained_name: google/medsiglip-448
+  revision: 9cea28a1a1195f665105faa6e8544c112fd960a4
   dtype: bfloat16
   use_fast_processor: false
   device_map: auto
-  attn_implementation: sdpa
-  offload_folder: .offload_medgemma_corrected
-  max_memory:
-    0: 20GiB
-    1: 20GiB
-    2: 20GiB
-    3: 20GiB
-    cpu: 64GiB
 
 prompts:
   clinical_v1:
-    preamble: >-
-      Review these two chronological digital subtraction angiography series.
-      Class 0 is unsuccessful reperfusion (mTICI 0, 1, or 2A). Class 1 is
-      successful reperfusion (mTICI 2B or 3).
-    question: "Which final reperfusion class is shown? Reply with only 0 or 1."
+    text_labels:
+      - digital subtraction angiography showing unsuccessful reperfusion, mTICI 0, 1, or 2A
+      - digital subtraction angiography showing successful reperfusion, mTICI 2B or 3
   concise_v2:
-    preamble: >-
-      The images below are chronological DSA frames from AP and sagittal views.
-    question: >-
-      Classify the final reperfusion outcome: reply 0 for mTICI 0/1/2A or 1
-      for mTICI 2B/3. Reply with one digit only.
+    text_labels:
+      - unsuccessful cerebral reperfusion on angiography
+      - successful cerebral reperfusion on angiography
 
 intensity_scaling:
   percentile_1_99:
@@ -77,7 +65,6 @@ selection:
   scaling_id: percentile_1_99
 
 evaluation:
-  answer_labels: ["0", "1"]
   threshold: 0.5
   smoke_samples: 10
   bootstrap_replicates: 10000

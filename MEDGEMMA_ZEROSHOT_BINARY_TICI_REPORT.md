@@ -1,5 +1,44 @@
 # MedGemma Zero-Shot Binary TICI Experiment Report
 
+> **INVALID EXPERIMENT:** Every exported class score in this run is `-1e9`
+> because non-finite model outputs were replaced by a numeric fallback. The
+> resulting `0.5` probabilities and class-0 predictions contain no model
+> signal. None of the performance values below should be cited or compared
+> with another model. This file is retained only as a failure record.
+
+## Corrected Pipeline Status
+
+The replacement pipeline was validated on 2026-07-12 with a balanced two-study
+smoke set. This is an implementation check, not a performance estimate.
+
+- checkpoint revision: `91850547d9f0b2fdd21aa7c5f4f3d1a8a52c243b`
+- environment: PyTorch `2.6.0+cu124`, Transformers `4.57.1`, native BF16
+- input: 8 chronological frames from each AP and sagittal view at `896x896`
+- finite-score rate: 2/2; exact ties: 0/2
+- peak allocated GPU memory: approximately 4.0 GB
+- real, reversed, blank, and text-only controls produced different score margins
+- corrected smoke artifacts: `output_runs_lightning/medgemma_zero_shot_binary_tici_corrected/`
+
+After the initial implementation, BF16 full-vocabulary projection produced
+exact class-score ties in 5.7% of one tuning variant. The corrected scorer now
+projects only the two fixed answer tokens with FP32 accumulation. A balanced
+10-study smoke run then produced finite scores for all studies with zero exact
+ties. Tie-rate threshold violations are retained as diagnostics rather than
+discarding completed predictions.
+
+The revision-pinned MedSigLIP control was subsequently validated with the same
+balanced two-study smoke set:
+
+- checkpoint revision: `9cea28a1a1195f665105faa6e8544c112fd960a4`
+- input: 8 frames from each AP and sagittal view at native `448x448`
+- finite-score rate: 2/2; exact ties: 0/2
+- peak allocated GPU memory: approximately 2.2 GB
+- real and blank-image controls produced different score margins
+- corrected smoke artifacts: `output_runs_lightning/medsiglip_zero_shot_binary_tici_control/`
+
+MedSigLIP averages independent per-frame logits, so reversing frame order is
+expected to leave its control score unchanged. It is not a temporal model.
+
 ## Overview
 
 This report documents the zero-shot binary TICI classification experiment run with `google/medgemma-1.5-4b-it` on the AmTICIS validation split.

@@ -44,6 +44,7 @@ wandb/
 wandb/latest-run/files/conda-environment.yaml
 *.pyth
 *.txt
+!medgemma_binary/requirements-medgemma.txt
 wandb/latest-run/files/config.yaml
 *.mdb
 *.prof
@@ -76,3 +77,6 @@ mae_*.log
 
 # Test files
 tests/
+!tests/
+tests/*
+!tests/test_medgemma_zero_shot.py
