@@ -42,6 +42,16 @@ def load_config(path: Path, overrides: Iterable[str] | None = None) -> dict[str,
         config = yaml.safe_load(handle) or {}
     if not isinstance(config, dict):
         raise ValueError(f"Expected a mapping in {path}.")
+    return apply_overrides(config, overrides)
+
+
+def apply_overrides(config: dict[str, Any], overrides: Iterable[str] | None) -> dict[str, Any]:
+    """Apply ``--set KEY=VALUE`` overrides in place.
+
+    Exposed separately from ``load_config`` so a caller that injects its own
+    defaults (the smoke phase) can do so *before* the user's explicit overrides,
+    letting the overrides win.
+    """
     deep_update(config, parse_overrides(overrides))
     return config
 

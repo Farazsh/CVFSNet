@@ -7,8 +7,13 @@ reads the final hidden state at the last prompt token and is trained with BCE.
     python -m medgemma_binary.qlora --phase train --seed 14207
     python -m medgemma_binary.qlora --phase final --seed 14207
 
-Checkpoints and thresholds are selected only on the internal tuning split. The
-150-study evaluation split is read only by ``--phase final``.
+Which studies select the checkpoint and threshold depends on
+``selection.protocol`` (see ``data.py``). Under ``internal`` they are the 53
+tuning studies and the 150-study evaluation split is read only by
+``--phase final``. Under ``full_train_val`` the run trains on all 261 train
+studies and early-stops on those same 150 val studies, so ``--phase final``
+re-scores the split the run already selected on -- a reporting convenience, not
+an independent evaluation.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from torch.utils.data import DataLoader
 
 from .common import (
     REPO_ROOT,
+    apply_overrides,
     environment_metadata,
     load_config,
     load_dotenv,
@@ -41,6 +47,32 @@ from .common import (
 )
 
 DEFAULT_CONFIG = Path(__file__).with_name("config_qlora_ap.yaml")
+MONITORS = ("f1_macro_then_auroc", "auroc")
+
+
+def resolve_monitor(training_cfg: Mapping[str, Any]) -> str:
+    """The quantity early stopping maximizes.
+
+    ``f1_macro_then_auroc`` (the default, and wave 1's behaviour) ranks epochs by
+    macro F1 at that epoch's own tuned threshold, breaking ties on AUROC.
+    ``auroc`` ranks on AUROC alone: any thresholded metric tracks the sigmoid's
+    scale, which wave 1 showed is a seed artifact rather than a property of the
+    model's discrimination.
+    """
+    monitor = str(training_cfg.get("monitor", "f1_macro_then_auroc"))
+    if monitor not in MONITORS:
+        raise ValueError(f"Unknown training.monitor '{monitor}'; expected one of {MONITORS}.")
+    return monitor
+
+
+def eval_split_label(config: Mapping[str, Any]) -> str:
+    """What the early-stopping split should be *called* in the artifacts.
+
+    Under ``selection.protocol: full_train_val`` that split is the val set, and a
+    file named ``tuning_seed14207_scores.csv`` full of val scores is a trap for
+    whoever reads the run directory next.
+    """
+    return str(config["run"].get("eval_split_label", "tuning"))
 
 
 # --------------------------------------------------------------------------- #
@@ -348,6 +380,8 @@ def train(config: Mapping[str, Any], data, model: MedGemmaBinaryClassifier, logg
     prompt = config["prompts"][str(config["selection"]["prompt_id"])]
     scaling = config["intensity_scaling"][str(config["selection"]["scaling_id"])]
     views = list(config["input"]["views"])
+    monitor = resolve_monitor(training_cfg)
+    label = eval_split_label(config)
 
     adapters, head = model.trainable_parameters()
     optimizer = torch.optim.AdamW(
@@ -450,29 +484,32 @@ def train(config: Mapping[str, Any], data, model: MedGemmaBinaryClassifier, logg
         record = {
             "epoch": epoch,
             "train/loss": train_loss,
-            "tuning/loss": tuning_loss,
-            "tuning/loss_gap": tuning_loss - train_loss,
-            "tuning/f1_macro_at_0.5": metrics["f1_macro"],
-            "tuning/f1_macro_at_tuned": epoch_f1,
-            "tuning/tuned_threshold": epoch_threshold,
-            "tuning/auroc": metrics["auroc"],
-            "tuning/balanced_accuracy": metrics["balanced_accuracy"],
-            "tuning/accuracy": metrics["accuracy"],
+            f"{label}/loss": tuning_loss,
+            f"{label}/loss_gap": tuning_loss - train_loss,
+            f"{label}/f1_macro_at_0.5": metrics["f1_macro"],
+            f"{label}/f1_macro_at_tuned": epoch_f1,
+            f"{label}/tuned_threshold": epoch_threshold,
+            f"{label}/auroc": metrics["auroc"],
+            f"{label}/balanced_accuracy": metrics["balanced_accuracy"],
+            f"{label}/accuracy": metrics["accuracy"],
             "epoch_seconds": time.perf_counter() - epoch_started,
             "peak_gpu_bytes": int(torch.cuda.max_memory_allocated(model.device)),
         }
-        record.update({f"tuning/{k}": v for k, v in _calibration(tuning_rows).items()})
+        record.update({f"{label}/{k}": v for k, v in _calibration(tuning_rows).items()})
         history.append(record)
         if logger is not None:
             logger.log(record, step=global_step)
         print(
-            f"epoch {epoch:3d} | train loss {train_loss:.4f} | tuning loss {tuning_loss:.4f} "
-            f"| tuning macro-F1 {epoch_f1:.4f} @ thr {epoch_threshold:.3f} "
+            f"epoch {epoch:3d} | train loss {train_loss:.4f} | {label} loss {tuning_loss:.4f} "
+            f"| {label} macro-F1 {epoch_f1:.4f} @ thr {epoch_threshold:.3f} "
             f"(F1@0.5 {metrics['f1_macro']:.4f}) | AUROC {metrics['auroc']:.4f}",
             flush=True,
         )
 
-        improved = (epoch_f1, metrics["auroc"]) > (best["macro_f1"], best["auroc"])
+        if monitor == "auroc":
+            improved = metrics["auroc"] > best["auroc"]
+        else:
+            improved = (epoch_f1, metrics["auroc"]) > (best["macro_f1"], best["auroc"])
         if improved:
             best = {
                 "macro_f1": epoch_f1,
@@ -496,7 +533,9 @@ def train(config: Mapping[str, Any], data, model: MedGemmaBinaryClassifier, logg
         "tuning_macro_f1_at_tuned_threshold": best["macro_f1"],
         "tuning_auroc": best["auroc"],
         "tuned_threshold": tuned_threshold,
-        "selection_metric": "f1_macro_at_tuned_threshold_then_auroc",
+        "selection_metric": monitor,
+        "eval_split_label": label,
+        "selection_protocol": str(config["selection"].get("protocol", "internal")),
         "wall_seconds": time.perf_counter() - started,
         "seconds_per_training_study": (time.perf_counter() - started)
         / max(len(train_loader) * len(history), 1),
@@ -513,7 +552,7 @@ def train(config: Mapping[str, Any], data, model: MedGemmaBinaryClassifier, logg
     tuning_summaries = _summaries(best_rows, config, tuned_threshold)
     write_artifacts(
         config=config,
-        split_name=f"tuning_seed{int(config['seed'])}",
+        split_name=f"{label}_seed{int(config['seed'])}",
         rows=_rescore(best_rows, tuned_threshold),
         summary={**tuning_summaries, **selection},
         metadata=environment_metadata(str(config["model"]["revision"])),
@@ -521,8 +560,8 @@ def train(config: Mapping[str, Any], data, model: MedGemmaBinaryClassifier, logg
     if logger is not None:
         logger.log(
             {
-                "best/tuning_f1_macro_at_tuned_threshold": best["macro_f1"],
-                "best/tuning_auroc": best["auroc"],
+                f"best/{label}_f1_macro_at_tuned_threshold": best["macro_f1"],
+                f"best/{label}_auroc": best["auroc"],
                 "best/epoch": best["epoch"],
                 "best/tuned_threshold": tuned_threshold,
             },
@@ -636,7 +675,14 @@ def balanced_subset(names: Sequence[str], labels: Sequence[int], count: int) -> 
 
 def main() -> None:
     args = parse_args()
-    config = load_config(args.config, args.set)
+    config = load_config(args.config)
+    # Smoke defaults go in first so that an explicit --set overrides them rather
+    # than being silently discarded by them.
+    if args.phase == "smoke":
+        config["training"]["max_epochs"] = 1
+        config["training"]["early_stopping_patience"] = 1
+        config["evaluation"]["bootstrap_replicates"] = 100
+    apply_overrides(config, args.set)
     if args.seed is not None:
         config["seed"] = int(args.seed)
     if args.print_config:
@@ -647,14 +693,21 @@ def main() -> None:
     load_dotenv()
     seed_everything(int(config["seed"]))
 
-    if args.phase == "smoke":
-        config["training"]["max_epochs"] = 1
-        config["training"]["early_stopping_patience"] = 1
-        config["evaluation"]["bootstrap_replicates"] = 100
-
     from .data import MedGemmaData
 
     data = MedGemmaData(config)
+    label = eval_split_label(config)
+    images_per_study = int(config["input"]["num_frames"]) * len(config["input"]["views"])
+    # Print the real split before --limit truncates it: the sizes are what the
+    # smoke test is checking.
+    print(
+        f"protocol={data.protocol} monitor={resolve_monitor(config['training'])} "
+        f"eval_split_label={label}\n"
+        f"development={len(data.development)} tuning={len(data.tuning)} final={len(data.final)} "
+        f"views={config['input']['views']} frames={config['input']['num_frames']} "
+        f"images/study={images_per_study}",
+        flush=True,
+    )
     if args.limit:
         if args.phase != "smoke":
             raise ValueError("--limit is a smoke-test convenience and must not shrink a real run.")
@@ -662,12 +715,11 @@ def main() -> None:
             data.development, data.labels_for(data.development), args.limit
         )
         data.tuning = balanced_subset(data.tuning, data.labels_for(data.tuning), args.limit)
-    print(
-        f"development={len(data.development)} tuning={len(data.tuning)} final={len(data.final)} "
-        f"views={config['input']['views']} frames={config['input']['num_frames']} "
-        f"images/study={int(config['input']['num_frames']) * len(config['input']['views'])}",
-        flush=True,
-    )
+        print(
+            f"--limit {args.limit}: development={len(data.development)} "
+            f"tuning={len(data.tuning)}",
+            flush=True,
+        )
 
     logger = make_logger(config, args.phase)
     device = torch.device("cuda", 0)

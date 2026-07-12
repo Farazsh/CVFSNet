@@ -1,0 +1,144 @@
+# E2 wave 2: MedGemma QLoRA on the val protocol, AP + sagittal in one prompt.
+#
+# This is one datapoint per study, not two: a single 16-image prompt carrying
+# AP VIEW / FRAME 1..8 followed by SAGITTAL VIEW / FRAME 1..8, and one
+# probability out. Nothing is averaged and the dataset is not expanded per view.
+#
+# Identical to config_qlora_ap.yaml except for the selection protocol, the
+# early-stopping monitor, and the view configuration. See
+# docs/QLORA_VAL_PROTOCOL_PLAN.md.
+#
+# Protocol: train on all 261 train studies, early-stop on the 150-study val
+# split, which is what VideoMAE and CVFSNet already do. This makes the three
+# model families directly comparable at the cost of selecting the epoch on the
+# same studies the run reports. Every number produced here is optimistically
+# biased by that; so are the baselines it is compared against. There is no test
+# set.
+#
+# Monitor: AUROC, not macro F1. Wave 1 showed the sigmoid's scale is a seed
+# artifact (seed 2718 never emitted a probability above 0.307 and was degenerate
+# at a 0.5 threshold while still scoring AUROC 0.742), so any thresholded
+# selection metric tracks probability collapse rather than discrimination. AUROC
+# was the only seed-stable quantity in wave 1 (sd 0.052 vs 0.213 for macro F1).
+
+seed: 14207
+
+run:
+  name: medgemma_qlora_val_dual
+  output_dir: output_runs_lightning
+  # The early-stopping split *is* val here, so name the artifacts accordingly.
+  eval_split_label: val
+
+wandb:
+  enabled: true
+  project: medgemma-binary-tici
+  group: e2_qlora_val_protocol
+  entity: null
+
+data:
+  config_path: amticis_pipeline/config.yaml
+  project_root: .
+  pipeline_overrides:
+    data:
+      label_mode: binary
+      num_frames: 8
+      image_size: 896
+      interpolation: trilinear
+      align_corners: true
+    views:
+      active: [AP, sagittal]
+    loader:
+      batch_size: 1
+      num_workers: 4
+      val_batch_size: 1
+      val_num_workers: 4
+      use_weighted_sampler: false
+      pin_memory: false
+      persistent_workers: true
+      prefetch_factor: 2
+    transforms:
+      train:
+        - {name: RandomRotation, params: {degrees: [-10, 10], fill: 192, p: 0.25}}
+        - {name: Crop,           params: {crop: [0.1, 0.1, 0.2, 0.1], p: 0.5}}
+        - {name: Resize,         params: {}}   # t / visual injected from data.*
+      val: []
+
+input:
+  num_frames: 8
+  image_size: 896
+  views: [AP, sagittal]  # must equal data.pipeline_overrides.views.active
+  frame_order: chronological
+
+model:
+  pretrained_name: google/medgemma-1.5-4b-it
+  revision: 91850547d9f0b2fdd21aa7c5f4f3d1a8a52c243b
+  use_fast_processor: false
+  attn_implementation: sdpa
+  head_dropout: 0.2
+
+quantization:
+  enabled: true
+  bits: 4
+  quant_type: nf4
+  double_quant: true
+  compute_dtype: bfloat16
+
+lora:
+  rank: 16
+  alpha: 16
+  dropout: 0.05
+  target_scope: all_linear_language
+
+optimizer:
+  adapter_lr: 0.0002
+  head_lr: 0.001
+  weight_decay: 0.01
+
+training:
+  micro_batch_size: 1
+  gradient_accumulation_steps: 8
+  max_epochs: 25
+  early_stopping_patience: 6
+  warmup_ratio: 0.03
+  scheduler: cosine
+  gradient_clip_val: 0.3
+  gradient_checkpointing: true
+  log_every_steps: 5
+  # f1_macro_then_auroc | auroc
+  monitor: auroc
+
+prompts:
+  clinical_v1:
+    preamble: >-
+      Review this chronological digital subtraction angiography series.
+      Class 0 is unsuccessful reperfusion (mTICI 0, 1, or 2A). Class 1 is
+      successful reperfusion (mTICI 2B or 3).
+    question: "Which final reperfusion class is shown? Reply with only 0 or 1."
+  concise_v2:
+    preamble: >-
+      The images below are chronological DSA frames.
+    question: >-
+      Classify the final reperfusion outcome: reply 0 for mTICI 0/1/2A or 1
+      for mTICI 2B/3. Reply with one digit only.
+
+intensity_scaling:
+  percentile_1_99:
+    mode: percentile
+    lower: 1.0
+    upper: 99.0
+  minmax:
+    mode: minmax
+
+selection:
+  # internal | full_train_val
+  protocol: full_train_val
+  split_seed: 14207
+  tuning_fraction: 0.20          # unused under full_train_val; kept for schema parity
+  # A separate manifest from the wave-1 208/53/150 one, which must not move.
+  manifest_path: output_runs_lightning/medgemma_full_train_val_split.json
+  prompt_id: clinical_v1
+  scaling_id: percentile_1_99
+
+evaluation:
+  threshold: 0.5
+  bootstrap_replicates: 10000

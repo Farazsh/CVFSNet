@@ -8,6 +8,7 @@ SigLIP vision tower that the plan requires to stay frozen.
 
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import torch
@@ -15,16 +16,29 @@ import torch.nn as nn
 from PIL import Image
 
 from amticis_pipeline.transforms import ResizeView
-from medgemma_binary.common import assert_disjoint_studies, load_config, scan_to_rgb_frames
+from medgemma_binary.common import (
+    apply_overrides,
+    assert_disjoint_studies,
+    load_config,
+    scan_to_rgb_frames,
+)
+from medgemma_binary.data import MedGemmaData
 from medgemma_binary.qlora import (
     balanced_subset,
     build_messages,
+    eval_split_label,
+    resolve_monitor,
     resolve_target_modules,
     select_threshold,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG = REPO_ROOT / "medgemma_binary/config_qlora_ap.yaml"
+VAL_CONFIGS = {
+    "ap": REPO_ROOT / "medgemma_binary/config_qlora_val_ap.yaml",
+    "sag": REPO_ROOT / "medgemma_binary/config_qlora_val_sag.yaml",
+    "dual": REPO_ROOT / "medgemma_binary/config_qlora_val_dual.yaml",
+}
 
 
 class FakeAttention(nn.Module):
@@ -300,6 +314,353 @@ class SelectionTest(unittest.TestCase):
 
         chosen = {name: label for name, label in zip(names, labels)}
         self.assertEqual(sorted(chosen[name] for name in subset), [0, 0, 1, 1])
+
+
+# --------------------------------------------------------------------------- #
+# Wave 2: the full_train_val protocol
+# --------------------------------------------------------------------------- #
+class FakeDataset:
+    """Stands in for an AmTICIS dataset: names, labels, and nothing else."""
+
+    def __init__(self, names, labels) -> None:
+        self.samples = list(names)
+        self._labels = [int(label) for label in labels]
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        return {"name": self.samples[index], "label": self._labels[index]}
+
+    def label_at(self, index):
+        return self._labels[index]
+
+
+class FakeLoaderConfig:
+    num_workers = 0
+    prefetch_factor = 2
+
+
+class FakePipelineConfig:
+    loader = FakeLoaderConfig()
+
+
+class FakeModule:
+    def __init__(self, train: FakeDataset, val: FakeDataset) -> None:
+        self._datasets = {"train": train, "val": val}
+        self.config = FakePipelineConfig()
+
+
+def _study_names(prefix: str, count: int) -> list[str]:
+    # patient_id() takes everything before the first underscore, so a distinct
+    # prefix per study keeps the patients disjoint.
+    return [f"{prefix}{index:03d}_a_C.nii.gz" for index in range(count)]
+
+
+def _alternating(count: int) -> list[int]:
+    return [index % 2 for index in range(count)]
+
+
+class ProtocolTest(unittest.TestCase):
+    """The split protocol that puts MedGemma on the VideoMAE/CVFSNet footing."""
+
+    TRAIN, VAL = 261, 150
+
+    def setUp(self):
+        self.train_names = _study_names("p", self.TRAIN)
+        self.val_names = _study_names("q", self.VAL)
+        self.train_dataset = FakeDataset(self.train_names, _alternating(self.TRAIN))
+        self.val_dataset = FakeDataset(self.val_names, _alternating(self.VAL))
+        self._tmp = __import__("tempfile").TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def _build(self, protocol: str, config_key: str = "ap") -> MedGemmaData:
+        config = load_config(VAL_CONFIGS[config_key])
+        config["selection"]["protocol"] = protocol
+        config["selection"]["manifest_path"] = str(
+            Path(self._tmp.name) / f"{protocol}_split.json"
+        )
+        module = FakeModule(self.train_dataset, self.val_dataset)
+        with mock.patch("medgemma_binary.data._pipeline_module", return_value=module):
+            return MedGemmaData(config)
+
+    def test_full_train_val_trains_on_every_train_study_and_stops_on_val(self):
+        data = self._build("full_train_val")
+
+        self.assertEqual(len(data.development), self.TRAIN)
+        self.assertEqual(len(data.tuning), self.VAL)
+        self.assertEqual(len(data.final), self.VAL)
+        self.assertEqual(data.development, sorted(self.train_names))
+        # tuning deliberately aliases final: the run selects on what it reports.
+        self.assertEqual(data.tuning, data.final)
+
+    def test_full_train_val_never_evaluates_on_a_trained_patient(self):
+        data = self._build("full_train_val")
+
+        assert_disjoint_studies({"development": data.development, "final": data.final})
+        self.assertFalse(set(data.development) & set(data.final))
+
+    def test_internal_protocol_is_unchanged(self):
+        # Regression guard: wave 1's 208/53/150 split must not move.
+        data = self._build("internal")
+
+        self.assertEqual(len(data.development), 208)
+        self.assertEqual(len(data.tuning), 53)
+        self.assertEqual(len(data.final), self.VAL)
+        self.assertFalse(set(data.development) & set(data.tuning))
+
+    def test_protocol_defaults_to_internal(self):
+        config = load_config(CONFIG)
+
+        self.assertNotIn("protocol", config["selection"])
+
+        config["selection"]["manifest_path"] = str(Path(self._tmp.name) / "default.json")
+        module = FakeModule(self.train_dataset, self.val_dataset)
+        with mock.patch("medgemma_binary.data._pipeline_module", return_value=module):
+            data = MedGemmaData(config)
+
+        self.assertEqual(data.protocol, "internal")
+        self.assertEqual(len(data.tuning), 53)
+
+    def test_unknown_protocol_raises(self):
+        with self.assertRaises(ValueError):
+            self._build("train_on_everything")
+
+    def test_labels_for_resolves_val_names_under_full_train_val(self):
+        # data.tuning holds val names here; an index over the train dataset alone
+        # would raise KeyError, and --limit calls this on every smoke run.
+        data = self._build("full_train_val")
+
+        labels = data.labels_for(data.tuning)
+
+        self.assertEqual(len(labels), self.VAL)
+        expected = {name: index % 2 for index, name in enumerate(self.val_names)}
+        self.assertEqual(labels, [expected[name] for name in data.tuning])
+
+    def test_labels_for_still_resolves_train_names(self):
+        data = self._build("full_train_val")
+
+        labels = data.labels_for(data.development)
+
+        self.assertEqual(len(labels), self.TRAIN)
+
+    def test_labels_for_rejects_an_unknown_study(self):
+        data = self._build("full_train_val")
+
+        with self.assertRaises(KeyError):
+            data.labels_for(["not_a_study_C.nii.gz"])
+
+    def test_tuning_loader_reads_the_val_dataset_under_full_train_val(self):
+        data = self._build("full_train_val")
+
+        loader = data.loader("tuning", shuffle=False, num_workers=0)
+
+        self.assertIs(loader.dataset.dataset, self.val_dataset)
+        self.assertEqual(len(loader.dataset), self.VAL)
+
+    def test_tuning_loader_reads_the_train_dataset_under_internal(self):
+        data = self._build("internal")
+
+        loader = data.loader("tuning", shuffle=False, num_workers=0)
+
+        self.assertIs(loader.dataset.dataset, self.train_dataset)
+        self.assertEqual(len(loader.dataset), 53)
+
+    def test_development_loader_stays_on_the_augmented_module(self):
+        # Both modules are the same fake here, so assert on the dataset key instead:
+        # development must resolve entirely within the train dataset.
+        data = self._build("full_train_val")
+
+        loader = data.loader("development", shuffle=True, num_workers=0)
+
+        self.assertEqual(len(loader.dataset), self.TRAIN)
+
+    def test_manifest_records_the_new_split_and_is_reconciled(self):
+        import json
+
+        data = self._build("full_train_val")
+        path = Path(self._tmp.name) / "full_train_val_split.json"
+
+        with open(path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+
+        self.assertEqual(len(manifest["development"]), self.TRAIN)
+        self.assertEqual(len(manifest["tuning"]), self.VAL)
+        self.assertEqual(len(manifest["final"]), self.VAL)
+
+        # A second run against the same manifest must agree ...
+        self._build("full_train_val")
+        # ... and a disagreeing one must fail loudly rather than re-split.
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({**manifest, "development": manifest["development"][:10]}, handle)
+        with self.assertRaises(RuntimeError):
+            self._build("full_train_val")
+
+        self.assertEqual(data.protocol, "full_train_val")
+
+    def test_the_wave_one_manifest_is_a_different_file(self):
+        # A 261/150/150 manifest can never equal the 208/53/150 one, so the two
+        # protocols must not share a manifest path or _reconcile_manifest raises.
+        wave_one = load_config(CONFIG)["selection"]["manifest_path"]
+        for key in VAL_CONFIGS:
+            wave_two = load_config(VAL_CONFIGS[key])["selection"]["manifest_path"]
+            self.assertNotEqual(wave_one, wave_two)
+            self.assertEqual(
+                wave_two, "output_runs_lightning/medgemma_full_train_val_split.json"
+            )
+
+
+class MonitorTest(unittest.TestCase):
+    def test_monitor_defaults_to_the_wave_one_behaviour(self):
+        self.assertEqual(resolve_monitor({}), "f1_macro_then_auroc")
+        self.assertEqual(
+            resolve_monitor(load_config(CONFIG)["training"]), "f1_macro_then_auroc"
+        )
+
+    def test_the_val_configs_monitor_auroc(self):
+        for key, path in VAL_CONFIGS.items():
+            with self.subTest(run=key):
+                self.assertEqual(resolve_monitor(load_config(path)["training"]), "auroc")
+
+    def test_unknown_monitor_raises(self):
+        with self.assertRaises(ValueError):
+            resolve_monitor({"monitor": "loss"})
+
+    def test_auroc_monitor_picks_the_max_auroc_epoch_over_the_max_f1_one(self):
+        # Reproduces the selection comparison in train(): epoch 2 wins on tuned
+        # macro F1, epoch 1 wins on AUROC. Under monitor: auroc, epoch 1 must win.
+        epochs = [
+            {"epoch": 1, "f1": 0.60, "auroc": 0.90},
+            {"epoch": 2, "f1": 0.75, "auroc": 0.80},
+        ]
+
+        for monitor, expected in (("auroc", 1), ("f1_macro_then_auroc", 2)):
+            with self.subTest(monitor=monitor):
+                best = {"macro_f1": -1.0, "auroc": -1.0, "epoch": -1}
+                for record in epochs:
+                    if monitor == "auroc":
+                        improved = record["auroc"] > best["auroc"]
+                    else:
+                        improved = (record["f1"], record["auroc"]) > (
+                            best["macro_f1"],
+                            best["auroc"],
+                        )
+                    if improved:
+                        best = {
+                            "macro_f1": record["f1"],
+                            "auroc": record["auroc"],
+                            "epoch": record["epoch"],
+                        }
+
+                self.assertEqual(best["epoch"], expected)
+
+
+class ValConfigTest(unittest.TestCase):
+    IMAGES = {"ap": 8, "sag": 8, "dual": 16}
+    VIEWS = {"ap": ["AP"], "sag": ["sagittal"], "dual": ["AP", "sagittal"]}
+
+    def test_images_per_study_is_8_8_16(self):
+        for key, expected in self.IMAGES.items():
+            with self.subTest(run=key):
+                config = load_config(VAL_CONFIGS[key])
+                images = int(config["input"]["num_frames"]) * len(config["input"]["views"])
+
+                self.assertEqual(images, expected)
+                self.assertEqual(config["input"]["views"], self.VIEWS[key])
+
+    def test_the_two_view_declarations_agree(self):
+        # data.py cross-checks these and raises if they disagree; a config that
+        # sets only one of them would train on the wrong view.
+        for key in VAL_CONFIGS:
+            with self.subTest(run=key):
+                config = load_config(VAL_CONFIGS[key])
+
+                self.assertEqual(
+                    config["input"]["views"],
+                    config["data"]["pipeline_overrides"]["views"]["active"],
+                )
+
+    def test_mismatched_views_raise(self):
+        from types import SimpleNamespace
+
+        from medgemma_binary import data as data_module
+
+        config = load_config(VAL_CONFIGS["ap"])
+        config["input"]["views"] = ["AP", "sagittal"]  # pipeline still says [AP]
+        resolved = SimpleNamespace(
+            data=SimpleNamespace(num_frames=8, image_size=896, label_mode="binary"),
+            views=SimpleNamespace(active=["AP"]),
+        )
+        fake = mock.MagicMock()
+        fake.config = resolved
+
+        with mock.patch.object(data_module, "AmTICISDataModule", return_value=fake):
+            with self.assertRaises(ValueError):
+                data_module._pipeline_module(config, augment=False)
+
+    def test_run_names_and_labels_do_not_collide_with_wave_one(self):
+        wave_one = load_config(CONFIG)["run"]["name"]
+        names = {load_config(path)["run"]["name"] for path in VAL_CONFIGS.values()}
+
+        self.assertEqual(len(names), 3)
+        self.assertNotIn(wave_one, names)
+        for path in VAL_CONFIGS.values():
+            self.assertEqual(eval_split_label(load_config(path)), "val")
+
+    def test_eval_split_label_defaults_to_tuning(self):
+        self.assertEqual(eval_split_label(load_config(CONFIG)), "tuning")
+        self.assertEqual(eval_split_label({"run": {}}), "tuning")
+
+    def test_the_qlora_recipe_is_carried_over_unchanged(self):
+        wave_one = load_config(CONFIG)
+        for key, path in VAL_CONFIGS.items():
+            with self.subTest(run=key):
+                config = load_config(path)
+                for section in ("quantization", "lora", "optimizer", "model"):
+                    self.assertEqual(config[section], wave_one[section])
+                for field in (
+                    "micro_batch_size",
+                    "gradient_accumulation_steps",
+                    "max_epochs",
+                    "early_stopping_patience",
+                    "warmup_ratio",
+                    "gradient_clip_val",
+                    "gradient_checkpointing",
+                ):
+                    self.assertEqual(
+                        config["training"][field], wave_one["training"][field], field
+                    )
+                self.assertEqual(config["seed"], 14207)
+                self.assertEqual(config["selection"]["prompt_id"], "clinical_v1")
+                self.assertEqual(config["selection"]["scaling_id"], "percentile_1_99")
+                self.assertFalse(
+                    config["data"]["pipeline_overrides"]["loader"]["use_weighted_sampler"]
+                )
+
+
+class SmokeOverrideTest(unittest.TestCase):
+    def test_explicit_set_beats_the_smoke_defaults(self):
+        # main() applies the smoke defaults and *then* the --set overrides, so
+        # --set training.max_epochs=3 must survive. The old order discarded it.
+        config = load_config(VAL_CONFIGS["ap"])
+        config["training"]["max_epochs"] = 1
+        config["training"]["early_stopping_patience"] = 1
+        config["evaluation"]["bootstrap_replicates"] = 100
+
+        apply_overrides(config, ["training.max_epochs=3"])
+
+        self.assertEqual(config["training"]["max_epochs"], 3)
+        # Untouched smoke defaults still apply.
+        self.assertEqual(config["training"]["early_stopping_patience"], 1)
+        self.assertEqual(config["evaluation"]["bootstrap_replicates"], 100)
+
+    def test_overrides_do_not_disturb_the_rest_of_the_config(self):
+        config = load_config(VAL_CONFIGS["dual"])
+
+        apply_overrides(config, ["training.max_epochs=3"])
+
+        self.assertEqual(config["input"]["views"], ["AP", "sagittal"])
+        self.assertEqual(config["selection"]["protocol"], "full_train_val")
 
 
 if __name__ == "__main__":

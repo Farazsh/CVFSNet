@@ -5,9 +5,22 @@ experiment YAML. Nothing here hard-codes those values: they flow into the
 repository's existing ``ResizeView`` trilinear resampling through
 ``build_pipeline_config``.
 
-The internal development/tuning split is the deterministic split already used by
-the zero-shot experiments, so every MedGemma strategy selects checkpoints and
-thresholds on the same 53 studies and leaves the same 150 studies locked.
+Two selection protocols are supported, chosen by ``selection.protocol``:
+
+``internal`` (the default)
+    The deterministic split already used by the zero-shot experiments: the 261
+    ``train`` studies are cut 80/20 into development and tuning, so every
+    MedGemma strategy selects checkpoints and thresholds on the same 53 studies
+    and leaves the same 150 ``val`` studies locked and unread until
+    ``--phase final``.
+
+``full_train_val``
+    Train on all 261 ``train`` studies and early-stop on the 150 ``val``
+    studies, which is the protocol the VideoMAE and CVFSNet experiments already
+    use. ``tuning`` therefore *aliases* ``final``: the run selects its epoch on
+    the same studies it reports. That is an optimistic bias, and it is
+    deliberate -- it is what makes these numbers comparable to the other model
+    families. It is not an estimate of held-out performance.
 """
 
 from __future__ import annotations
@@ -21,6 +34,8 @@ from amticis_pipeline.dataset_loader import AmTICISDataModule
 from amticis_training.config import build_pipeline_config, deep_update
 
 from .common import REPO_ROOT, assert_disjoint_studies, make_internal_split, write_split_manifest
+
+PROTOCOLS = ("internal", "full_train_val")
 
 
 def _pipeline_module(config: Mapping[str, Any], *, augment: bool) -> AmTICISDataModule:
@@ -67,19 +82,37 @@ class MedGemmaData:
         self.eval_module = _pipeline_module(config, augment=False)
 
         selection = config["selection"]
+        self.protocol = str(selection.get("protocol", "internal"))
+        if self.protocol not in PROTOCOLS:
+            raise ValueError(
+                f"Unknown selection.protocol '{self.protocol}'; expected one of {PROTOCOLS}."
+            )
+
         train_dataset = self.eval_module._datasets["train"]
-        splits = make_internal_split(
-            train_dataset.samples,
-            [train_dataset.label_at(index) for index in range(len(train_dataset))],
-            tuning_fraction=float(selection["tuning_fraction"]),
-            seed=int(selection["split_seed"]),
-        )
-        self.development: list[str] = splits["development"]
-        self.tuning: list[str] = splits["tuning"]
         self.final: list[str] = list(self.eval_module._datasets["val"].samples)
 
+        if self.protocol == "internal":
+            splits = make_internal_split(
+                train_dataset.samples,
+                [train_dataset.label_at(index) for index in range(len(train_dataset))],
+                tuning_fraction=float(selection["tuning_fraction"]),
+                seed=int(selection["split_seed"]),
+            )
+            self.development: list[str] = splits["development"]
+            self.tuning: list[str] = splits["tuning"]
+        else:
+            self.development = sorted(train_dataset.samples)
+            self.tuning = list(self.final)
+
         manifest = {"development": self.development, "tuning": self.tuning, "final": self.final}
-        assert_disjoint_studies(manifest)
+        # Under full_train_val, ``tuning`` is ``final`` by construction, so a pairwise
+        # check over all three would flag those 150 studies as overlapping themselves.
+        # What must hold either way is that nothing trained on is ever evaluated on.
+        assert_disjoint_studies(
+            manifest
+            if self.protocol == "internal"
+            else {"development": self.development, "final": self.final}
+        )
         self._reconcile_manifest(REPO_ROOT / str(selection["manifest_path"]), manifest)
 
     @staticmethod
@@ -97,16 +130,31 @@ class MedGemmaData:
             write_split_manifest(path, manifest)
 
     def labels_for(self, names: Sequence[str]) -> list[int]:
-        dataset = self.eval_module._datasets["train"]
-        index = {name: position for position, name in enumerate(dataset.samples)}
-        return [dataset.label_at(index[name]) for name in names]
+        """Resolve labels for any study name, whichever dataset it lives in.
+
+        Under ``full_train_val`` the tuning names are ``val`` studies, so looking
+        them up in the ``train`` dataset alone raises ``KeyError``.
+        """
+        labels: dict[str, int] = {}
+        for key in ("train", "val"):
+            dataset = self.eval_module._datasets[key]
+            for position, name in enumerate(dataset.samples):
+                labels.setdefault(name, dataset.label_at(position))
+        missing = [name for name in names if name not in labels]
+        if missing:
+            raise KeyError(f"{len(missing)} studies are in no dataset (e.g. {missing[0]}).")
+        return [labels[name] for name in names]
 
     def loader(self, split: str, *, shuffle: bool, num_workers: int | None = None) -> DataLoader:
         """One study per batch, matching the plan's ``micro_batch_size: 1``."""
         if split == "development":
             module, key, names = self.train_module, "train", self.development
         elif split == "tuning":
-            module, key, names = self.eval_module, "train", self.tuning
+            # The tuning studies are drawn from ``train`` under the internal protocol
+            # and from ``val`` under full_train_val; either way they are scored
+            # through the deterministic (un-augmented) module.
+            tuning_key = "train" if self.protocol == "internal" else "val"
+            module, key, names = self.eval_module, tuning_key, self.tuning
         elif split == "final":
             module, key, names = self.eval_module, "val", self.final
         else:
