@@ -1,0 +1,66 @@
+# MedGemma 1.5 4B zero-shot binary TICI classification.
+#
+# The number of frames per scan stays in YAML so it can be changed later
+# without touching code. The underlying dataloader still performs the same
+# trilinear temporal/spatial interpolation used elsewhere in the repository.
+
+seed: 14207
+
+run:
+  name: medgemma_zero_shot_binary_tici
+  output_dir: output_runs_lightning
+
+data:
+  config_path: amticis_pipeline/config.yaml
+  project_root: .
+  pipeline_overrides:
+    data:
+      label_mode: binary
+      num_frames: 1
+      image_size: 128
+      interpolation: trilinear
+      align_corners: true
+    views:
+      active: [AP, sagittal]
+    loader:
+      batch_size: 1
+      num_workers: 4
+      val_batch_size: 1
+      val_num_workers: 4
+      use_weighted_sampler: false
+    transforms:
+      train: []
+      val: []
+
+model:
+  pretrained_name: google/medgemma-1.5-4b-it
+  revision: null
+  dtype: float16
+  quantization: 4bit
+  bnb_4bit_compute_dtype: float16
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+  offload_folder: .offload_medgemma
+  device_map:
+    model.vision_tower: 0
+    model.multi_modal_projector: 0
+    model.language_model: 3
+    lm_head: 3
+
+evaluation:
+  split: val
+  output_name: fuse
+  answer_labels: ["0", "1"]
+  intensity_scaling:
+    mode: percentile
+    lower: 1.0
+    upper: 99.0
+
+logging:
+  wandb:
+    enabled: true
+    project: AmTICIS
+    entity: null
+    tags: [medgemma, zero-shot, binary, tici, dsa]
+    offline: false
+    api_key_env: WANDB_API_KEY
