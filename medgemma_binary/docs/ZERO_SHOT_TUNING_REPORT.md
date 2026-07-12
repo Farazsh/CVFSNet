@@ -26,14 +26,14 @@ Binary labels are:
 
 ### Implementation and configuration
 
-- [MedGemma runner](medgemma_binary/zero_shot.py)
-- [MedSigLIP runner](medgemma_binary/medsiglip_zero_shot.py)
-- [Shared evaluation utilities](medgemma_binary/common.py)
-- [MedGemma configuration](medgemma_binary/config_zero_shot.yaml)
-- [MedSigLIP configuration](medgemma_binary/config_medsiglip_zero_shot.yaml)
-- [Isolated environment requirements](medgemma_binary/requirements-medgemma.txt)
-- [Regression and processor tests](tests/test_medgemma_zero_shot.py)
-- [Original failed-run report](MEDGEMMA_ZEROSHOT_BINARY_TICI_REPORT.md)
+- [MedGemma runner](../zero_shot.py)
+- [MedSigLIP runner](../medsiglip_zero_shot.py)
+- [Shared evaluation utilities](../common.py)
+- [MedGemma configuration](../config_zero_shot.yaml)
+- [MedSigLIP configuration](../config_medsiglip_zero_shot.yaml)
+- [Isolated environment requirements](../requirements-medgemma.txt)
+- [Regression and processor tests](../../tests/test_medgemma_zero_shot.py)
+- [Original failed-run report](ZERO_SHOT_FAILED_RUN_REPORT.md)
 
 ### Generated artifacts
 

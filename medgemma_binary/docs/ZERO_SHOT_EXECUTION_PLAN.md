@@ -1,6 +1,7 @@
-# MedGemma Zero-Shot Binary TICI
+# MedGemma Zero-Shot Binary TICI Execution Plan
 
-The detailed experiment plan is kept in [`MEDGEMMA_BINARY_TICI_PLAN.md`](MEDGEMMA_BINARY_TICI_PLAN.md).
+The detailed experiment plan is kept in
+[`BINARY_TICI_EXPERIMENT_PLAN.md`](BINARY_TICI_EXPERIMENT_PLAN.md).
 
 The original run is invalid because every class score was non-finite and was
 silently replaced with `-1e9`. Its accuracy, F1, AUROC, and confusion matrix

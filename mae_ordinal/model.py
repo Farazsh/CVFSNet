@@ -1,6 +1,6 @@
 """VideoMAE backbone + CORN ordinal head for coronal mTICI grading.
 
-Design (see PLAN.md):
+Design (see mae_ordinal/docs/ORDINAL_EXPERIMENT_PLAN.md):
     * Backbone: ``VideoMAEModel`` (Base), pretrained on Kinetics-400
       (``MCG-NJU/videomae-base-finetuned-kinetics``).
     * Input adapter -> VideoMAE / ImageNet normalization: the data pipeline

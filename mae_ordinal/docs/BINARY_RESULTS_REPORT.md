@@ -1,4 +1,4 @@
-# Results — VideoMAE Binary T012a vs T2b3
+# VideoMAE Binary T012a vs T2b3 Results Report
 
 Three parallel full-fine-tune runs: AP-only, sagittal-only, and dual-view (shared-backbone
 late fusion). Binary cross-entropy loss, ImageNet adapter normalization, same train/val split

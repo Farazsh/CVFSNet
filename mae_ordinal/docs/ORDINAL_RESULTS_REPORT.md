@@ -1,4 +1,4 @@
-# Results — VideoMAE + CORN ordinal (coronal-only mTICI)
+# VideoMAE CORN Ordinal Results Report
 
 Contrastive experiment: **frozen backbone (linear-probe)** vs **full fine-tuning** of a
 VideoMAE-Base backbone with a CORN ordinal head, coronal (AP) view only, `fuse01` 4-class

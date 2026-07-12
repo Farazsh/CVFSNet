@@ -146,7 +146,7 @@ def main() -> None:
             print(f"[WARN] {run_name} failed: {type(error).__name__}: {error}")
 
     if summaries:
-        results_path = REPO_ROOT / "RESULTS_BINARY.md"
+        results_path = REPO_ROOT / "mae_ordinal" / "docs" / "BINARY_RESULTS_REPORT.md"
         _append_results(results_path, summaries)
 
 

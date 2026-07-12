@@ -1,82 +1,304 @@
-**CVFSNet: A Cross View Fusion Scoring Network for end-to-end mTICI Scoring**
-==============================================================================================================================
+# CVFSNet Project Overview
 
-Created by Weijin Xu, Tao Tan, Huihua Yang, Wentao Liu, Yifu Chen, Ling Zhang, Xipeng Pan, Feng Gao, Yiming Deng, Theo
-van Walsum, Matthijs van der Sluijs, Ruisheng Su
+CVFSNet is a medical-video classification research project for automatically
+grading reperfusion after mechanical thrombectomy from Digital Subtraction
+Angiography (DSA). It uses the AmTICIS dataset and supports coronal/AP,
+sagittal, and dual-view inputs.
 
+The repository currently contains four related systems:
 
-![](Show//Net_CVFMTrans_QV.png)
-![](Show//Show.png)
+1. The original CVFSNet implementation and training loop.
+2. A configuration-driven PyTorch Lightning implementation of CVFSNet.
+3. VideoMAE experiments for ordinal and binary mTICI classification.
+4. MedGemma and MedSigLIP zero-shot binary mTICI experiments.
 
-Prequisites
-------------
-Please see requirtments.txt
+The original project documentation is preserved in
+[`readme_old.md`](readme_old.md).
 
-Introduction
-------------
-The modified Thrombolysis In Cerebral Infarction (mTICI) score serves as one of the key clinical indicators to assess the success of the Mechanical Thrombectomy (MT), requiring physicians to inspect Digital Subtraction Angiography (DSA) images in both the coronal and sagittal views. However, assessing mTICI scores manually is time-consuming and has considerable observer variability. An automatic, objective, and end-to-end method for assigning mTICI scores may effectively avoid observer errors. Therefore, in this paper, we propose a novel Cross View Fusion Scoring Network (CVFSNet) for automatic, objective, and end-to-end mTICI scoring, which employs dual branches to simultaneously extract spatial-temporal features from coronal and sagittal views. Then, a novel Cross View Fusion Module (CVFM) is introduced to fuse the features from two views, which explores the positional characteristics of coronal and sagittal views to generate a pseudo-oblique sagittal feature and ultimately constructs more representative features to enhance the scoring performance. In addition, we provide AmTICIS, a newly collected and the first publicly available DSA image dataset with expert annotations for automatic mTICI scoring, which can effectively promote researchers to conduct studies of ischemic stroke based on DSA images and finally help patients get better medical treatment. Extensive experimentation results demonstrate the promising performance of our methods and the validity of the cross-view fusion module. 
+## Clinical Labels
 
-Step 1 Download the AmTICIS dataset
-------------
-The AmTICIS have been publish in zenodo under Creative Commons Attribution Non Commercial No Derivatives 4.0 International license at https://zenodo.org/records/17790966. 
+Labels are derived from scan filenames and can be represented at three
+granularities:
 
+| Mode | Classes |
+| --- | --- |
+| `full` | T0, T1, T2a, T2b, T3 |
+| `fuse01` | T0/T1, T2a, T2b, T3 |
+| `binary` | T0/T1/T2a vs. T2b/T3 |
 
-Step 2 Setup the config file
-------------------------
-Change the training setup as you want in config.py
+The mappings are implemented in
+[`amticis_pipeline/utils.py`](amticis_pipeline/utils.py). The binary boundary
+represents unsuccessful versus successful reperfusion.
 
-Step 3 Train and Val
-------------------------
-you can use the follow command to train and val,
+## Repository Structure
 
-<pre><code>python main.py --opts --nodebug --options</pre></code>
+| Path | Responsibility |
+| --- | --- |
+| [`Src/CVFSNet.py`](Src/CVFSNet.py) | Original CVFSNet and CVFM architecture |
+| [`Data/`](Data/) | Legacy dataset and augmentation code |
+| [`Loss/`](Loss/) | Legacy imbalance and multi-output losses |
+| [`main.py`](main.py) | Legacy training entry point |
+| [`infer.py`](infer.py) | Legacy checkpoint evaluation |
+| [`amticis_pipeline/`](amticis_pipeline/) | Structured dataset, transforms, configuration, and Lightning DataModule |
+| [`amticis_training/`](amticis_training/) | Modern Lightning CVFSNet training stack |
+| [`mae_ordinal/`](mae_ordinal/) | VideoMAE ordinal and binary experiments |
+| [`medgemma_binary/`](medgemma_binary/) | MedGemma and MedSigLIP zero-shot binary experiments |
+| [`plotting_functions/`](plotting_functions/) | Dataset and augmentation visualization tools |
+| [`mae_ordinal/docs/ORDINAL_RESULTS_REPORT.md`](mae_ordinal/docs/ORDINAL_RESULTS_REPORT.md) | Ordinal experiment results |
+| [`mae_ordinal/docs/BINARY_RESULTS_REPORT.md`](mae_ordinal/docs/BINARY_RESULTS_REPORT.md) | Binary experiment results |
+| [`mae_ordinal/docs/COMPREHENSIVE_EXPERIMENT_REPORT.md`](mae_ordinal/docs/COMPREHENSIVE_EXPERIMENT_REPORT.md) | Comprehensive VideoMAE experiment report |
+| [`medgemma_binary/docs/`](medgemma_binary/docs/) | MedGemma plans and reports |
 
-for example:
-<pre><code>python main.py --no_debug --opts LOSS.Para.p 0.8 LOSS.Para.q 1.0 BASIC.Seed 1407 METHOD.Desc DUAL_VIEW-FUSE01-T08#V256-RENAMED/CVFM-LabelSmoothSeasaw_MISO-Loss_p0.8_Q1.0-NEW-try3 DATA.Train.DataPara.fast_time_size 8 DATA.Train.DataPara.visual_size 256 DATA.Train.LoaderPara.batch_size 4 DATA.Train.LoaderPara.num_workers 8 DATA.Val.DataPara.fast_time_size 8 DATA.Val.DataPara.visual_size 256 DATA.Val.LoaderPara.batch_size 4 DATA.Val.LoaderPara.num_workers 8 MODEL.Para.input_clip_length 8 MODEL.Para.input_crop_size 256
-</pre></code>
+## Dataset Pipeline
 
-if you specify the --no_debug flag, the code will consider you in a formally training, it will automaticlly add a git commit with info as METHOD.DESC, and wandb will log your curve and upload the wandb server. The output data will be stored in:
+The reusable pipeline is controlled by
+[`amticis_pipeline/config.yaml`](amticis_pipeline/config.yaml).
 
-/$ROOT$/output_runs/AmTICIS/CVFSNet/METHOD.DESC/$TIMESTAMP$/METHOD.Desc
+```text
+train_val_split.json
+    -> resolve AP/sagittal NIfTI filename
+    -> load float32 volume with SimpleITK
+    -> convert to (1, T, H, W)
+    -> trilinear temporal/spatial resampling
+    -> training augmentation pipeline
+    -> normalization
+    -> dictionary containing views, label, and scan name
+```
 
-EG: /ai/mnt/code/CVFSNet/output_runs/AmTICIS/CVFSNet/DUAL_VIEW-FUSE01-T08#V256-RENAMED/2024-1209-1653#CVFM-LabelSmoothSeasaw_MISO-Loss_p0.8_Q1.0
+The dataset returns one tensor for every configured view, a label tensor, and
+the source scan name. View filenames are resolved from the coronal filename by
+replacing the `_C` marker with the configured view marker.
 
-else if you do not pass the --no_debug flag, the code will consider you in the debug mode, and not add a git commit, the wandb will log your curve but do not upload the wandb server. The output data will be stored in:
+Default preprocessing includes:
 
-/$ROOT$/output_runs/AmTICIS/DEBUG/METHOD.DESC/$TIMESTAMP$/METHOD.Desc
+- 8 frames at 256 x 256 for CVFSNet.
+- 16 frames at 224 x 224 for VideoMAE.
+- Morphology, flipping, motion, ghosting, spikes, blur, noise, gamma, rotation,
+  and crop augmentation during training.
+- Deterministic validation normalization.
+- Inverse-frequency `WeightedRandomSampler` sampling during training.
 
-EG: /ai/mnt/code/CVFSNet/output_runs/AmTICIS/DEBUG/DUAL_VIEW-FUSE01-T08#V256-RENAMED/2024-1209-1653#CVFM-LabelSmoothSeasaw_MISO-Loss_p0.8_Q1.0
+The Lightning integration is implemented in
+[`amticis_pipeline/dataset_loader.py`](amticis_pipeline/dataset_loader.py).
 
-$NOTE$ if metrics have been stop updating for 70 (_C.BASIC.Early_stop) epochs, it will automaticlly stop training and going to inference.
+## Dataset Statistics
 
+The configured split contains 411 studies with no patient-ID overlap between
+training and validation:
 
-Step 4 Inference
-------------------------
+| Split | T0 | T1 | T2a | T2b | T3 | Total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Train | 80 | 18 | 30 | 48 | 85 | 261 |
+| Validation | 37 | 14 | 29 | 23 | 47 | 150 |
 
-<pre><code>python infer.py --infer_path $infer_path$ --epochs $epoch_id$</pre></code>
+Binary distribution:
 
-EG: python infer.py --infer_path /ai/mnt/code/CVFSNet/output_runs/AmTICIS/DEBUG/DUAL_VIEW-FUSE01-T08#V256-RENAMED/2024-1209-1653#CVFM-LabelSmoothSeasaw_MISO-Loss_p0.8_Q1.0 --epochs -1
+| Split | T0/T1/T2a | T2b/T3 |
+| --- | ---: | ---: |
+| Train | 128 | 133 |
+| Validation | 80 | 70 |
 
-epochs == -1 indicates inferring all saved models, if else, please specify the epoch number.
+There is no independent test cohort. The current data configuration maps the
+logical `test` split to `val`, which is important when interpreting reported
+results.
 
-the saved data shown as following:
+## CVFSNet Architecture
 
-![](Show//Output.png)
+CVFSNet consists of:
 
+- Two independent X3D-style spatiotemporal CNN branches.
+- One branch for AP/coronal video and one for sagittal video.
+- Optional auxiliary classification heads for deep supervision.
+- A Cross View Fusion Module (CVFM).
+- Separate coronal, sagittal, and fused predictions.
 
-Step 5 Check Results
-------------------------
-After inferencing, the results will be save in AmTICIS_results.csv, you can sorting or filtering the results from different methods.
+CVFM combines intermediate branch features using a learned angular or
+pseudo-oblique feature, a Pythagorean feature magnitude, multi-scale attention,
+and projected spatiotemporal pooling. The resulting representation is passed to
+a fused classification head.
 
-Citation
-------------------------
+The modern CVFSNet training stack supports registry-based model and loss
+construction, typed pipeline configuration, named multi-output metrics, CSV and
+Weights & Biases logging, checkpointing, and distributed training. Its default
+loss combines label smoothing and Seesaw cross-entropy across the fused,
+per-view, and enabled auxiliary outputs.
 
-if you find the CVFSNet and AmTICIS useful, please cite below:
+## VideoMAE Architecture
 
-Xu, W., Tan, T., Yang, H., Liu, W., Chen, Y., Zhang, L., ... & Su, R. (2025). CVFSNet: A Cross View Fusion Scoring Network for end-to-end mTICI scoring. Medical Image Analysis, 102, 103508.
+The VideoMAE experiments use the Kinetics-pretrained Hugging Face
+`VideoMAEModel`.
 
+The input adapter performs:
 
-License
---------
+```text
+grayscale clip
+    -> replicate one channel to RGB
+    -> per-clip min-max normalization
+    -> ImageNet mean/std normalization
+    -> VideoMAE encoder
+```
 
-The CVFSNet code and AmTICIS dataset are released under Creative Commons Attribution Non Commercial No Derivatives 4.0 International license.
+This adapter is essential because the pipeline's original normalized DSA
+intensities have much lower variance than the pretrained VideoMAE model expects.
+
+### Ordinal Model
+
+The ordinal model uses mean-pooled VideoMAE tokens followed by LayerNorm,
+dropout, and a linear head producing `K - 1` CORN conditional ordinal logits.
+In addition to classification metrics, it records mean absolute error,
+off-by-one accuracy, and quadratic weighted kappa.
+
+The relevant implementation is in
+[`mae_ordinal/model.py`](mae_ordinal/model.py) and
+[`mae_ordinal/ordinal.py`](mae_ordinal/ordinal.py).
+
+### Binary Models
+
+Three binary configurations are provided:
+
+- AP-only classification.
+- Sagittal-only classification.
+- Dual-view classification with a shared VideoMAE encoder and late
+  concatenation of AP and sagittal features.
+
+## Training Workflows
+
+Dependencies are managed through `uv` in [`pyproject.toml`](pyproject.toml).
+The environment uses Python 3.9-3.12, PyTorch 2.4.1, CUDA 12.1 wheels,
+Lightning, Transformers, TorchIO, SimpleITK, and scikit-learn.
+
+Install or synchronize the environment:
+
+```bash
+uv sync
+```
+
+### Modern CVFSNet
+
+```bash
+uv run python -m amticis_training.train
+```
+
+Configuration values can be overridden with dotted keys:
+
+```bash
+uv run python -m amticis_training.train \
+  --set trainer.max_epochs=2 logging.wandb.enabled=false
+```
+
+The default configuration is
+[`amticis_training/config.yaml`](amticis_training/config.yaml).
+
+### VideoMAE Ordinal
+
+Frozen backbone:
+
+```bash
+uv run python -m mae_ordinal.train \
+  --config mae_ordinal/config_frozen.yaml
+```
+
+Full fine-tuning:
+
+```bash
+uv run python -m mae_ordinal.train \
+  --config mae_ordinal/config_finetune.yaml
+```
+
+### VideoMAE Binary
+
+```bash
+uv run python -m mae_ordinal.train \
+  --config mae_ordinal/config_binary_ap.yaml
+
+uv run python -m mae_ordinal.train \
+  --config mae_ordinal/config_binary_sagittal.yaml
+
+uv run python -m mae_ordinal.train \
+  --config mae_ordinal/config_binary_dual.yaml
+```
+
+Evaluate the binary checkpoints and regenerate plots with:
+
+```bash
+uv run python -m mae_ordinal.eval_binary
+uv run python -m mae_ordinal.plot_confusion_binary
+```
+
+### Legacy CVFSNet
+
+The original workflow remains available through `main.py`, YACS configuration,
+and `infer.py`. See [`readme_old.md`](readme_old.md) for its command-line
+options and output layout.
+
+## Recorded Results
+
+### Ordinal AP-Only Validation
+
+| Model | Accuracy | Macro F1 | QWK |
+| --- | ---: | ---: | ---: |
+| Frozen VideoMAE | 0.447 | 0.425 | 0.346 |
+| Fine-tuned VideoMAE | 0.573-0.580 | 0.497 | 0.647-0.648 |
+| Coronal CVFSNet | 0.547 | 0.479 | 0.698 |
+
+Fine-tuned VideoMAE improves accuracy and macro F1 over the coronal CVFSNet
+baseline, but CVFSNet has better ordinal agreement. The fine-tuned VideoMAE
+model strongly favors T3 and has relatively weak T2a/T2b recall.
+
+### Binary Validation
+
+| VideoMAE input | Accuracy | Macro F1 | AUROC |
+| --- | ---: | ---: | ---: |
+| AP | 0.827 | 0.826 | 0.925 |
+| Sagittal | 0.780 | 0.779 | 0.845 |
+| Dual | 0.853 | 0.853 | 0.895 |
+
+The dual-view binary model is the strongest recorded classifier. These results
+remain exploratory because checkpoint selection and reporting use the same
+150-study validation cohort.
+
+Detailed results and limitations are documented in
+[`ORDINAL_RESULTS_REPORT.md`](mae_ordinal/docs/ORDINAL_RESULTS_REPORT.md),
+[`BINARY_RESULTS_REPORT.md`](mae_ordinal/docs/BINARY_RESULTS_REPORT.md), and
+[`COMPREHENSIVE_EXPERIMENT_REPORT.md`](mae_ordinal/docs/COMPREHENSIVE_EXPERIMENT_REPORT.md).
+
+## Testing
+
+Run the unit tests with:
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
+
+The current tests cover training-configuration merging and classification
+metrics. Dataset loading, transforms, model forward passes, losses, checkpoint
+loading, and end-to-end training are not yet covered.
+
+## Known Limitations and Risks
+
+- There is no held-out test set; `test` currently aliases `val`.
+- Experiments generally use one random seed and best-validation checkpoint
+  selection.
+- The repository retains both legacy and modern preprocessing and training
+  implementations, which creates duplicated behavior and maintenance cost.
+- The default Lightning CVFSNet configuration currently maps both `AP` and
+  `sagittal` view definitions to `_S`. It must map `AP` from `_C` to `_C` before
+  being used for a genuine dual-view run.
+- Several training configurations contain machine-specific GPU device IDs.
+- The small 261-study training cohort is challenging for an approximately
+  86-million-parameter VideoMAE backbone and is prone to overfitting.
+- CVFSNet and VideoMAE comparisons use related but not always identical
+  objectives, particularly when four-class CVFSNet predictions are collapsed
+  into binary predictions after training.
+
+## License and Citation
+
+The code and AmTICIS dataset are released under the Creative Commons
+Attribution-NonCommercial-NoDerivatives 4.0 International license. See
+[`LICENSE`](LICENSE) for the full terms.
+
+If using this project, cite:
+
+> Xu, W., Tan, T., Yang, H., Liu, W., Chen, Y., Zhang, L., et al. (2025).
+> CVFSNet: A Cross View Fusion Scoring Network for end-to-end mTICI scoring.
+> Medical Image Analysis, 102, 103508.

@@ -1,4 +1,4 @@
-# PLAN — VideoMAE + Ordinal Regression for coronal-only mTICI grading
+# VideoMAE Ordinal Regression Experiment Plan
 
 **Status:** Draft for review. **No implementation code has been written.** Do not start
 building until this plan is explicitly approved.

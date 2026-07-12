@@ -1,4 +1,4 @@
-# VideoMAE Binary TICI Classification (T012a vs T2b3)
+# VideoMAE Binary TICI Classification Experiment Plan
 
 **Branch:** `mae-binary-mix`  
 **Status:** Implemented; training and evaluation complete.
@@ -12,7 +12,8 @@
 | **T012a** (class 0) | T0, T1, T2A | 0 | Incomplete / partial reperfusion |
 | **T2b3** (class 1) | T2B, T3 | 1 | Near-complete / complete reperfusion |
 
-This matches the repo's existing **`label_mode: binary`** in [`amticis_pipeline/utils.py`](amticis_pipeline/utils.py) (`_BINARY_LABELS`).
+This matches the repo's existing **`label_mode: binary`** in
+[`amticis_pipeline/utils.py`](../../amticis_pipeline/utils.py) (`_BINARY_LABELS`).
 
 **Class distribution (same split as prior experiments):**
 
@@ -27,7 +28,8 @@ This matches the repo's existing **`label_mode: binary`** in [`amticis_pipeline/
 
 ## 2. Reuse from prior VideoMAE work
 
-Build on [`mae_ordinal/`](mae_ordinal/) without modifying `amticis_pipeline/`, `amticis_training/`, `Src/`, `Data/`, `Loss/`, or `Lib/`.
+Build on [`mae_ordinal/`](../) without modifying `amticis_pipeline/`,
+`amticis_training/`, `Src/`, `Data/`, `Loss/`, or `Lib/`.
 
 | Component | Reuse | Binary change |
 |-----------|-------|---------------|
@@ -106,7 +108,7 @@ Baseline comparison uses **post-hoc collapsed fuse01 predictions**, not BCE-trai
 | `mae_ordinal/config_binary_*.yaml` | Three experiment configs |
 | `mae_ordinal/eval_binary.py` | Checkpoint eval + sigmoid CSV export |
 | `mae_ordinal/plot_confusion_binary.py` | Binary CM comparison plot |
-| `RESULTS_BINARY.md` | Results summary (populated after training) |
+| `mae_ordinal/docs/BINARY_RESULTS_REPORT.md` | Results summary (populated after training) |
 
 ---
 

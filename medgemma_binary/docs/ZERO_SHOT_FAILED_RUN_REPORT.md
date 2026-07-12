@@ -1,4 +1,4 @@
-# MedGemma Zero-Shot Binary TICI Experiment Report
+# MedGemma Zero-Shot Binary TICI Failed-Run Report
 
 > **INVALID EXPERIMENT:** Every exported class score in this run is `-1e9`
 > because non-finite model outputs were replaced by a numeric fallback. The
