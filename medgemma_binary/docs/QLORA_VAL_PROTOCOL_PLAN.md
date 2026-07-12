@@ -1,8 +1,23 @@
 # MedGemma QLoRA Wave 2 — AP / Sagittal / Dual on the Val Protocol
 
-**Status: not started.** The working tree is clean; no code changes have been made. This
-document is written to be executed from a cold context — it assumes no memory of the
-conversation that produced it.
+**Status: executing (2026-07-12).** Sections 5 and 6 are done and committed (`2812b6e`).
+The smoke test passed on all three view configs and the three full runs of section 7 are
+training. Remaining: `--phase final` per run, then the section-8 report.
+
+Two things the smoke test settled, both of which the plan flagged as open risks:
+
+- **Dual view fits comfortably.** Peak 8.08 GiB at 16 images/study against a 24 GiB card,
+  so the `num_frames: 6` fallback in §6.4 is *not* needed and dual sees the same 8 frames
+  per view as the single-view runs. The comparison is clean.
+- **Sagittal routing is correct.** The sagittal run resolves `*_S*.nii.gz` and the AP run
+  `*_C*.nii.gz`, verified both by literal path and by pixel content (the two views' tensors
+  differ; each single-view config matches the corresponding view inside the dual prompt).
+  This was §9.6's worry — a silent view bug would have been indistinguishable from
+  "sagittal is just harder."
+
+Measured epoch times (261 train + 150 eval, three runs sharing the box): AP ~34 min,
+sagittal ~35 min, dual ~74 min — close to the §4 estimates, so the §4 wall-clock still
+holds.
 
 ---
 
