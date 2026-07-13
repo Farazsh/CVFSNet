@@ -27,31 +27,75 @@ cross-view reasoning helps.
 
 ### Against the other model families
 
-| Model | Accuracy | Macro F1 | AUROC |
-|---|---:|---:|---:|
-| VideoMAE AP | 0.827 | 0.826 | **0.925** |
-| VideoMAE sagittal | 0.780 | 0.779 | 0.845 |
-| VideoMAE dual | 0.853 | 0.853 | 0.895 |
-| CVFSNet `binary_cor_v3` (fused head) | 0.867 | 0.867 | 0.895 |
-| CVFSNet `binary_fusion_v3` (fused head) | 0.853 | 0.853 | 0.905 |
-| MedGemma QLoRA AP | 0.693 | 0.692 | 0.804 |
-| MedGemma QLoRA sagittal | 0.773 | 0.773 | 0.845 |
-| MedGemma QLoRA dual | 0.767 | 0.767 | 0.857 |
+All rows below are the same 150-study val split, scored at the natural threshold. Baseline
+values are taken from the project's metrics tables of record —
+`Assets/confusion_matrix_metrics_cvfsnet_binary_runs_mod3.csv` and
+`..._videomae_binary_runs.csv` — which is where the MedGemma rows now also live.
 
-MedGemma lands **below** both purpose-built video models. The clearest statement the data
-supports: VideoMAE AP (0.925) lies outside the upper bound of MedGemma AP's CI (0.871), so
-that gap is real. Elsewhere the comparison is softer — MedGemma sagittal matches VideoMAE
-sagittal exactly (0.845), and MedGemma dual (0.857) is within CI of CVFSNet (0.895–0.905).
+| Model | Views | AUROC | AUPRC | Accuracy | Macro F1 | Recall | Precision | Specificity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| CVFSNet | Fusion | **0.928** | 0.905 | **0.907** | **0.907** | 0.929 | 0.878 | 0.887 |
+| CVFSNet | Coronal | 0.916 | 0.892 | 0.887 | 0.887 | 0.914 | 0.853 | 0.863 |
+| CVFSNet | Sagittal | 0.890 | 0.859 | 0.833 | 0.833 | 0.829 | 0.817 | 0.838 |
+| VideoMAE | AP | 0.925 | 0.912 | 0.827 | 0.826 | 0.971 | 0.739 | 0.700 |
+| VideoMAE | Dual | 0.895 | 0.834 | 0.853 | 0.853 | 0.971 | 0.773 | 0.750 |
+| VideoMAE | Sagittal | 0.845 | 0.779 | 0.780 | 0.779 | 0.900 | 0.708 | 0.675 |
+| **MedGemma QLoRA** | Dual | 0.857 | 0.840 | 0.767 | 0.767 | 0.800 | 0.727 | 0.738 |
+| **MedGemma QLoRA** | Sagittal | 0.845 | 0.852 | 0.773 | 0.773 | 0.800 | 0.737 | 0.750 |
+| **MedGemma QLoRA** | Coronal (AP) | 0.804 | 0.779 | 0.693 | 0.692 | 0.814 | 0.633 | 0.588 |
 
-The pattern worth noting is on **accuracy and F1**, not AUROC: MedGemma's thresholded
-metrics trail by 6–13 points even where its AUROC is competitive. The ranking is decent;
-the decision probabilities are poor. See §7.
+**MedGemma is the weakest of the three model families on every metric.** The two strongest
+baselines — CVFSNet fusion (AUROC 0.928) and VideoMAE AP (0.925) — lie **outside the upper
+bound of the 95% CI of *every* MedGemma run**, including MedGemma's best (dual, CI upper
+0.914). That gap is real, not noise, and it is the central negative finding of this wave.
+
+The comparison is softer further down: MedGemma sagittal (0.845) matches VideoMAE sagittal
+exactly, and CVFSNet sagittal (0.890) sits inside MedGemma dual's CI. So MedGemma is
+competitive with the *weakest* configurations of the other families, and clearly beaten by
+their best.
+
+The gap is widest on the **thresholded** metrics, not AUROC. MedGemma's best accuracy
+(0.773) trails CVFSNet fusion by 13.4 points and VideoMAE dual by 8.6; its AP run trails
+CVFSNet coronal by 19.4 points. Its AUROC deficit is smaller than its accuracy deficit,
+which is the signature of a model that *ranks* acceptably but whose decision probabilities
+are poorly calibrated. See §7 — this is not a small caveat, it is most of the gap.
+
+> **Provenance note.** An earlier draft of this report quoted CVFSNet at AUROC 0.895–0.905
+> and accuracy 0.853–0.867, taken from `BINARY_TICI_EXPERIMENT_PLAN.md`. Those values are
+> stale. The metrics CSV above, regenerated from the CVFSNet checkpoints, gives
+> 0.890–0.928 AUROC and 0.833–0.907 accuracy. The correction moves CVFSNet **up**, and so
+> strengthens rather than weakens the conclusion that MedGemma trails it.
 
 > **Bias statement — applies to every row in both tables above.** Each model, MedGemma and
 > baselines alike, was early-stopped on the same 150 val studies it reports. There is no
 > held-out test set anywhere in this project. Every number here is optimistically biased by
 > best-epoch-on-eval selection. That shared bias is deliberate — it is what makes the rows
 > comparable — but **none of these are estimates of held-out performance.**
+
+### 1.1 Against MedGemma zero-shot — what the fine-tuning bought
+
+| Run | Split | n | AUROC | AUPRC | Accuracy | Macro F1 | Recall | Specificity |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Zero-shot, `concise_v2` (selected) | tuning | 53 | **0.403** | 0.451 | 0.453 | 0.440 | 0.296 | 0.615 |
+| Zero-shot, `clinical_v1` (prompt-matched) | tuning | 53 | 0.530 | 0.533 | 0.528 | 0.379 | 1.000 | 0.038 |
+| QLoRA dual (fine-tuned) | val | 150 | 0.857 | 0.840 | 0.767 | 0.767 | 0.800 | 0.738 |
+
+> **These rows are not on the same studies.** The zero-shot numbers are the 53-study
+> *tuning* split, not the 150-study val split. **No valid zero-shot result on val exists:**
+> the only zero-shot run that ever consumed val is an invalid run whose every class score is
+> `-1e9` (see `ZERO_SHOT_FAILED_RUN_REPORT.md`), and whose numbers must never be cited. The
+> comparison below is therefore directional, not a like-for-like delta.
+
+Even allowing for that, the direction is unambiguous: **zero-shot MedGemma has no usable
+signal on this task.** The variant the zero-shot tuning rule selected scores AUROC 0.403 —
+*below chance*. The variant using the same `clinical_v1` prompt and `percentile_1_99`
+scaling as these QLoRA runs scores 0.530, which is chance, and reaches it degenerately by
+calling 52 of 53 studies positive (recall 1.000, specificity 0.038).
+
+So the ~0.86 AUROC of the fine-tuned model is not a pretrained MedGemma capability being
+surfaced by a good prompt. It is **created by the QLoRA adaptation of 29.8 M parameters**.
+That is a real result, and it is the strongest argument for pushing further on adaptation
+(§10.2: unfreezing the projector and the vision tower) rather than on prompt engineering.
 
 ---
 
@@ -466,9 +510,14 @@ copy-paste error.
 - MedGemma 1.5 4B, QLoRA-adapted with a frozen vision tower, reaches **0.80–0.86 val AUROC**
   on binary mTICI from DSA — clearly better than chance, and in the same territory as
   VideoMAE sagittal.
-- It is **worse than the best purpose-built video model.** VideoMAE AP's 0.925 lies outside
-  MedGemma AP's entire 95% CI.
-- Its **probabilities are unreliable**, AP's catastrophically so.
+- **Fine-tuning does all of the work.** Zero-shot MedGemma has no usable signal on this task
+  (§1.1): the selected zero-shot variant scores AUROC 0.403, *below* chance. QLoRA moves the
+  model from nothing to 0.80–0.86.
+- It is **worse than both purpose-built model families.** CVFSNet fusion (0.928) and
+  VideoMAE AP (0.925) both lie outside the 95% CI of *every* MedGemma run, including
+  MedGemma's best (dual, CI upper 0.914).
+- Its **probabilities are unreliable**, AP's catastrophically so — and this, not ranking
+  ability, is where most of the gap to the baselines lives.
 - Dual-view (16 images, 4,096 vision tokens) fits in 8.1 GiB and costs 2.17× AP per study.
 
 **Does not establish:**
@@ -533,3 +582,16 @@ Per run, under `output_runs_lightning/medgemma_qlora_val_{ap,sag,dual}/`:
 
 AP and sagittal additionally carry `final_seed14207_*` (identical values — see §8).
 Split manifest: `output_runs_lightning/medgemma_full_train_val_split.json` (261/150/150).
+
+**Cross-model metrics tables of record** (where these runs' headline numbers now live,
+alongside CVFSNet and VideoMAE):
+
+| File | Contents |
+|---|---|
+| `Assets/confusion_matrix_metrics_cvfsnet_binary_runs_mod3.csv` | CVFSNet + MedGemma QLoRA (3 runs) + MedGemma zero-shot (2 variants), with tp/tn/fp/fn and `split`/`n` columns |
+| `Assets/confusion_matrix_metrics_videomae_binary_runs.csv` | VideoMAE |
+| `Assets/metrics_comparison_table.csv` | generated Model x View table, via `python -m amticis_training.build_metrics_comparison_table` |
+
+The MedGemma rows there are at threshold 0.5 (not the tuned threshold), so they are
+like-for-like with the other families. The zero-shot rows carry `split=tuning, n=53` and
+must not be read as val-split results.
