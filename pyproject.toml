@@ -10,6 +10,7 @@ dependencies = [
   "pillow",
   "opencv-python",
   "simpleitk",
+  "nibabel",
   "lmdb",
   "scikit-image",
   "torchio",
@@ -32,6 +33,12 @@ dependencies = [
   "python-pptx>=1.0.2",
   "pytorch-lightning>=2.6.0",
   "transformers>=4.57.6",
+  "torchmetrics",
+  "pandas",
+  "xlsxwriter",
+  "lightly-train>=0.16.2,<0.17",
+  "timm>=1.0.28",
+  "easydict>=1.13",
 ]
 
 [tool.uv]

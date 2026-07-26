@@ -1,4 +1,8 @@
-"""Lightning module for VideoMAE binary T012a vs T2b3 classification."""
+"""Lightning module for VideoMAE binary T012a vs T2b3 classification.
+
+Metrics match ``dinov3``: epoch-level AUROC / AUPRC / accuracy / precision /
+recall / F1 / specificity logged as flat ``train|val/<name>`` keys.
+"""
 
 from __future__ import annotations
 
@@ -13,11 +17,9 @@ try:
 except Exception:  # pragma: no cover
     from pytorch_lightning import LightningModule
 
-from amticis_training.classification_metrics import ClassificationMetricAccumulator
+from dinov3.metrics import binary_metrics
 
-from .model import binary_pseudologits, layerwise_param_groups
-
-OUTPUT_NAME = "fuse"
+from .model import layerwise_param_groups
 
 
 class VideoMAEBinaryModule(LightningModule):
@@ -31,16 +33,11 @@ class VideoMAEBinaryModule(LightningModule):
         input_cfg = self.config.get("model", {}).get("input", {})
         self.dual_view = input_cfg.get("type") == "dual_view_list"
         self.view_key = input_cfg.get("view", "AP")
-
-        metric_cfg = self.config.get("metrics", {})
-        acc_kwargs = dict(
-            num_classes=num_classes,
-            undefined_value=metric_cfg.get("undefined_value", 0.0),
-            log_per_class=metric_cfg.get("log_per_class", True),
-            outputs=metric_cfg.get("outputs"),
-        )
-        self.train_metrics = ClassificationMetricAccumulator(**acc_kwargs)
-        self.val_metrics = ClassificationMetricAccumulator(**acc_kwargs)
+        self.save_hyperparameters({"config": self.config}, ignore=["model"])
+        self._train_probabilities: list[torch.Tensor] = []
+        self._train_targets: list[torch.Tensor] = []
+        self._val_probabilities: list[torch.Tensor] = []
+        self._val_targets: list[torch.Tensor] = []
 
     def _model_input(self, batch: Mapping[str, Any]):
         if self.dual_view:
@@ -64,35 +61,58 @@ class VideoMAEBinaryModule(LightningModule):
             prog_bar=True,
             batch_size=int(label.shape[0]),
         )
-        accumulator = self.train_metrics if stage == "train" else self.val_metrics
-        pseudo = binary_pseudologits(logit.detach().unsqueeze(1))
-        accumulator.update(OUTPUT_NAME, pseudo, label)
+        probabilities = torch.sigmoid(logit).detach().cpu()
+        if stage == "train":
+            self._train_probabilities.append(probabilities)
+            self._train_targets.append(label.detach().cpu())
+        else:
+            self._val_probabilities.append(probabilities)
+            self._val_targets.append(label.detach().cpu())
         return loss
 
     def on_train_epoch_start(self) -> None:
         self.model.train()
 
     def training_step(self, batch, batch_idx):
+        del batch_idx
         return self._shared_step(batch, "train")
 
     def validation_step(self, batch, batch_idx):
+        del batch_idx
         self._shared_step(batch, "val")
 
     def on_train_epoch_end(self) -> None:
-        self._log_epoch("train", self.train_metrics)
+        self._log_metrics("train", self._train_probabilities, self._train_targets)
 
     def on_validation_epoch_end(self) -> None:
-        self._log_epoch("val", self.val_metrics)
+        self._log_metrics("val", self._val_probabilities, self._val_targets)
 
-    def _log_epoch(self, stage: str, accumulator: ClassificationMetricAccumulator) -> None:
-        metrics = accumulator.compute()
-        loggable = {
-            f"{stage}/{key}": torch.tensor(float(value), device=self.device)
-            for key, value in metrics.items()
-        }
-        if loggable:
-            self.log_dict(loggable, on_epoch=True, prog_bar=False)
-        accumulator.reset()
+    def _log_metrics(
+        self,
+        stage: str,
+        probabilities: list[torch.Tensor],
+        targets: list[torch.Tensor],
+    ) -> None:
+        if probabilities:
+            target_tensor = torch.cat(targets)
+            # Lightning sanity checks may inspect only a small, single-class
+            # prefix. Full-epoch and final evaluation still require both classes.
+            if torch.unique(target_tensor).numel() == 2:
+                metrics = binary_metrics(
+                    torch.cat(probabilities).numpy(),
+                    target_tensor.numpy(),
+                    threshold=0.5,
+                )
+                self.log_dict(
+                    {
+                        f"{stage}/{name}": torch.tensor(value, device=self.device)
+                        for name, value in metrics.items()
+                    },
+                    on_epoch=True,
+                    sync_dist=False,
+                )
+        probabilities.clear()
+        targets.clear()
 
     def configure_optimizers(self):
         optimizer_cfg = self.config["optimizer"]
@@ -130,7 +150,7 @@ class VideoMAEBinaryModule(LightningModule):
                 "scheduler": scheduler,
                 "interval": scheduler_cfg.get("interval", "epoch"),
                 "frequency": scheduler_cfg.get("frequency", 1),
-                "monitor": scheduler_cfg.get("monitor", "val/fuse/f1_macro"),
+                "monitor": scheduler_cfg.get("monitor", "val/auroc"),
             },
         }
 

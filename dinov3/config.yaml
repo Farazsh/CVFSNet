@@ -1,0 +1,118 @@
+seed: 14207
+
+run:
+  name: dinov3_vits16_binary_tici_ap_seed14207
+  output_dir: output_runs_lightning
+
+data:
+  root_dir: AmTICIS
+  split_file: train_val_split.json
+  split_view_key: CORONAL_VIEW
+  split_name_extension: .dcm
+  file_extension: .nii.gz
+  view:
+    name: AP
+    replace_from: _C
+    replace_to: _C
+  num_frames: 3
+  image_size: 224
+  interpolation: trilinear
+  align_corners: true
+  percentile_lower: 1.0
+  percentile_upper: 99.0
+  loader:
+    batch_size: 32
+    num_workers: 8
+    val_batch_size: 32
+    val_num_workers: 8
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+  augmentation:
+    horizontal_flip_probability: 0.25
+    rotation_probability: 0.25
+    rotation_degrees: 10.0
+    crop_scale: [0.9, 1.0]
+    crop_ratio: [0.95, 1.05]
+
+model:
+  # Select `lightly` for Lightly Train's public dinov3/vits16 weights or
+  # `huggingface` for Meta's gated Hugging Face checkpoint.
+  backend: lightly
+  lightly_name: dinov3/vits16
+  pretrained_name: facebook/dinov3-vits16-pretrain-lvd1689m
+  revision: null
+  token_env: HF_TOKEN
+  dropout: 0.3
+  expected_num_register_tokens: 4
+  lightly_normalization:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+loss:
+  name: bce_with_logits
+  pos_weight: null
+
+optimizer:
+  backbone_lr: 0.00001
+  head_lr: 0.0001
+  weight_decay: 0.05
+  betas: [0.9, 0.999]
+
+scheduler:
+  warmup_epochs: 5
+  warmup_start_factor: 0.01
+  eta_min: 0.0000001
+
+trainer:
+  max_epochs: 75
+  accelerator: gpu
+  devices: [0]
+  precision: 16-mixed
+  log_every_n_steps: 5
+  deterministic: false
+  benchmark: true
+  gradient_clip_val: 1.0
+
+checkpointing:
+  monitor: val/auroc
+  mode: max
+  save_top_k: 1
+  save_last: true
+
+early_stopping:
+  enabled: true
+  monitor: val/auroc
+  mode: max
+  patience: 15
+
+threshold:
+  strategy: maximize_macro_f1
+  tie_breaker: closest_to_0.5
+
+logging:
+  csv:
+    enabled: true
+  wandb:
+    enabled: true
+    project: AmTICIS
+    entity: null
+    tags: [dinov3, vits16, binary, tici, ap, finetune]
+    offline: false
+    api_key_env: WANDB_API_KEY
+    log_model: false
+
+evaluation:
+  scores_filename: val_scores.csv
+  json_filename: evaluation.json
+  workbook_suffix: dinov3_vits16_binary_tici_ap_eval.xlsx
+  excel_metadata:
+    Model: lightly-dinov3-vits16
+    Dimension: 2D
+    Label1: BinaryTICI
+    Label2: T012a_vs_T2b3
+    InputSize: 3x224x224
+    Optimizer: AdamWBackbone1e-5Head1e-4Cosine
+    Loop: train_val
+    ExperimentVersion: seed14207
+    ValidationSplit: val

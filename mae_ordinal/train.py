@@ -2,9 +2,10 @@
 
     uv run python -m mae_ordinal.train
     uv run python -m mae_ordinal.train --config mae_ordinal/config_binary_ap.yaml
+    uv run python -m mae_ordinal.train --config mae_ordinal/config_binary_v2_ap.yaml
 
-Reuses the existing data pipeline and metric accumulator; does not modify any
-file inside amticis_pipeline / amticis_training / Src / Data / Loss / Lib.
+Reuses the existing data pipeline; does not modify any file inside
+amticis_pipeline / amticis_training / Src / Data / Loss / Lib.
 """
 
 from __future__ import annotations
@@ -37,10 +38,16 @@ from amticis_training.config import deep_update, parse_overrides
 
 from .binary_lightning_module import VideoMAEBinaryModule
 from .dataloader import build_datamodule
+from .evaluate import evaluate_checkpoint
 from .lightning_module import VideoMAEOrdinalModule
 from .model import build_videomae_binary, build_videomae_ordinal
 
-BINARY_MODEL_NAMES = {"videomae_binary", "videomae_binary_dual"}
+BINARY_MODEL_NAMES = {
+    "videomae_binary",
+    "videomae_binary_dual",
+    "videomaev2_binary",
+    "videomaev2_binary_dual",
+}
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -100,7 +107,8 @@ def main() -> None:
     num_classes = datamodule.config.data.num_classes
 
     model_name = str(config.get("model", {}).get("name", "videomae_ordinal"))
-    if model_name in BINARY_MODEL_NAMES:
+    is_binary = model_name in BINARY_MODEL_NAMES
+    if is_binary:
         model = build_videomae_binary(config["model"])
         module = VideoMAEBinaryModule(model=model, config=config, num_classes=num_classes)
     else:
@@ -112,14 +120,39 @@ def main() -> None:
     with open(run_dir / "resolved_training_config.yaml", "w", encoding="utf-8") as handle:
         yaml.safe_dump(config, handle, sort_keys=False)
 
+    callbacks, checkpoint_callback = _build_callbacks(config, run_dir, is_binary=is_binary)
     trainer = Trainer(
         **dict(config["trainer"]),
         default_root_dir=str(run_dir),
         logger=_build_loggers(config, run_dir),
-        callbacks=_build_callbacks(config),
+        callbacks=callbacks,
         enable_checkpointing=bool(config.get("checkpointing", {}).get("enabled", True)),
     )
     trainer.fit(module, datamodule=datamodule)
+
+    if (
+        is_binary
+        and checkpoint_callback is not None
+        and getattr(trainer, "is_global_zero", True)
+    ):
+        best_path = checkpoint_callback.best_model_path
+        if not best_path:
+            raise RuntimeError("Binary training completed without a best checkpoint path.")
+        # Post-fit eval on a single device (avoid multi-process Hub/CUDA contention).
+        eval_config = dict(config)
+        eval_trainer = dict(eval_config.get("trainer", {}))
+        devices = eval_trainer.get("devices", [0])
+        if isinstance(devices, int):
+            eval_device = 0
+        else:
+            eval_device = int(list(devices)[0])
+        eval_trainer["devices"] = [eval_device]
+        eval_trainer.pop("strategy", None)
+        eval_config["trainer"] = eval_trainer
+        result = evaluate_checkpoint(eval_config, best_path, run_dir)
+        print(f"Best checkpoint: {best_path}")
+        print(f"Tuned threshold: {result['threshold']:.6f}")
+        print(f"Workbook: {result['paths']['workbook']}")
 
 
 def _build_loggers(config: Dict[str, Any], run_dir: Path):
@@ -151,32 +184,40 @@ def _build_loggers(config: Dict[str, Any], run_dir: Path):
     return loggers if loggers else False
 
 
-def _build_callbacks(config: Dict[str, Any]):
+def _build_callbacks(config: Dict[str, Any], run_dir: Path, is_binary: bool):
     callbacks = []
+    checkpoint_callback = None
     checkpoint_cfg = config.get("checkpointing", {})
     if checkpoint_cfg.get("enabled", True):
-        callbacks.append(
-            ModelCheckpoint(
-                monitor=checkpoint_cfg.get("monitor", "val/fuse/f1_macro"),
-                mode=checkpoint_cfg.get("mode", "max"),
-                save_top_k=checkpoint_cfg.get("save_top_k", 1),
-                save_last=checkpoint_cfg.get("save_last", True),
-                filename="epoch={epoch:03d}",
-                auto_insert_metric_name=False,
-            )
+        default_monitor = "val/auroc" if is_binary else "val/fuse/f1_macro"
+        filename = (
+            "epoch={epoch:03d}-val_auroc={val/auroc:.4f}"
+            if is_binary
+            else "epoch={epoch:03d}"
         )
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=str(run_dir / "checkpoints") if is_binary else None,
+            monitor=checkpoint_cfg.get("monitor", default_monitor),
+            mode=checkpoint_cfg.get("mode", "max"),
+            save_top_k=checkpoint_cfg.get("save_top_k", 1),
+            save_last=checkpoint_cfg.get("save_last", True),
+            filename=filename,
+            auto_insert_metric_name=False,
+        )
+        callbacks.append(checkpoint_callback)
     early_cfg = config.get("early_stopping", {})
     if early_cfg.get("enabled", False):
+        default_monitor = "val/auroc" if is_binary else "val/fuse/f1_macro"
         callbacks.append(
             EarlyStopping(
-                monitor=early_cfg.get("monitor", "val/fuse/f1_macro"),
+                monitor=early_cfg.get("monitor", default_monitor),
                 mode=early_cfg.get("mode", "max"),
                 patience=early_cfg.get("patience", 40),
             )
         )
     if config.get("scheduler", {}).get("name"):
         callbacks.append(LearningRateMonitor(logging_interval="epoch"))
-    return callbacks
+    return callbacks, checkpoint_callback
 
 
 if __name__ == "__main__":

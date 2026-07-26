@@ -1,33 +1,36 @@
-# VideoMAE binary T012a vs T2b3 — dual-view (AP + sagittal), shared backbone
+# VideoMAE2 binary T012a vs T2b3 — sagittal view, full fine-tune
 
 seed: 14207
 
 run:
-  name: mae_binary_t012a_dual
+  name: mae_v2_binary_t012a_sag
   output_dir: output_runs_lightning
 
 data:
   config_path: amticis_pipeline/config.yaml
   project_root: .
-  preset: dual_binary
+  preset: sagittal_binary
   pipeline_overrides:
+    data:
+      num_frames: 16
     loader:
-      batch_size: 4
-      num_workers: 8
-      val_batch_size: 4
-      val_num_workers: 8
+      # Per-GPU batch; effective batch = 2 * 4 GPUs = 8
+      batch_size: 2
+      num_workers: 4
+      val_batch_size: 2
+      val_num_workers: 4
       use_weighted_sampler: true
 
 model:
-  name: videomae_binary_dual
+  name: videomaev2_binary
   input:
-    type: dual_view_list
-    views: [AP, sagittal]
+    type: single_view_tensor
+    view: sagittal
   params:
-    pretrained_name: MCG-NJU/videomae-base-finetuned-kinetics
+    pretrained_name: OpenGVLab/VideoMAEv2-Base
+    trust_remote_code: true
     normalize: imagenet
     freeze_backbone: false
-    hidden_dropout_prob: 0.1
     dropout: 0.5
     expected_num_frames: 16
     expected_image_size: 224
@@ -49,7 +52,8 @@ scheduler:
 trainer:
   max_epochs: 75
   accelerator: gpu
-  devices: [0]
+  devices: [0, 1, 2, 3]
+  strategy: ddp
   precision: 16-mixed
   log_every_n_steps: 5
   deterministic: false
@@ -76,9 +80,9 @@ threshold:
 evaluation:
   scores_filename: val_scores.csv
   json_filename: evaluation.json
-  workbook_suffix: videomae_binary_tici_dual_eval.xlsx
+  workbook_suffix: videomaev2_binary_tici_sag_eval.xlsx
   excel_metadata:
-    Model: videomae-base-kinetics-dual
+    Model: videomaev2-base
     Dimension: 3D
     Label1: BinaryTICI
     Label2: T012a_vs_T2b3
@@ -95,7 +99,7 @@ logging:
     enabled: true
     project: AmTICIS
     entity: null
-    tags: [videomae, binary, bce, t012a, dual, finetune]
+    tags: [videomaev2, binary, bce, t012a, sagittal, finetune]
     offline: false
     api_key_env: WANDB_API_KEY
     log_model: false

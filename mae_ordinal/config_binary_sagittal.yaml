@@ -58,23 +58,35 @@ trainer:
 
 checkpointing:
   enabled: true
-  monitor: val/fuse/f1_macro
+  monitor: val/auroc
   mode: max
   save_top_k: 1
   save_last: true
 
 early_stopping:
   enabled: true
-  monitor: val/fuse/f1_macro
+  monitor: val/auroc
   mode: max
   patience: 25
 
-metrics:
-  undefined_value: 0.0
-  log_per_class: true
-  outputs:
-    default_enabled: true
-    default_metrics: [all]
+threshold:
+  strategy: maximize_macro_f1
+  tie_breaker: closest_to_0.5
+
+evaluation:
+  scores_filename: val_scores.csv
+  json_filename: evaluation.json
+  workbook_suffix: videomae_binary_tici_sag_eval.xlsx
+  excel_metadata:
+    Model: videomae-base-kinetics
+    Dimension: 3D
+    Label1: BinaryTICI
+    Label2: T012a_vs_T2b3
+    InputSize: 16x224x224
+    Optimizer: AdamWLLRD2e-4Cosine
+    Loop: train_val
+    ExperimentVersion: seed14207
+    ValidationSplit: val
 
 logging:
   csv:

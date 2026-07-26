@@ -80,3 +80,13 @@ tests/
 !tests/
 tests/*
 !tests/test_medgemma_zero_shot.py
+!tests/test_dinov3.py
+
+# Data folders (NIfTI/DICOM scans, spreadsheets — not source)
+DIAS_nifti/
+DSA_public/
+DSCA_nifti/
+pretraining_DSA/
+*.nii
+*.nii.gz
+*.xlsx
